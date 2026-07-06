@@ -6,11 +6,8 @@ package:
   version: ${{ version }}
 
 source:
-  # TODO: sha256 below is a placeholder until v${{ version }} is tagged and pushed
   url: https://github.com/babeloff/nu_plugin_sysml_v2/archive/refs/tags/v${{ version }}.tar.gz
-  # TODO: fill in after tagging the release, e.g.:
-  #   sha256sum v${{ version }}.tar.gz
-  sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256: f1ad56a8a50f4ddf8daa463d01bed2473d5d3c58f54c80f9ef1301ef5d8aa502
 
 build:
   number: 0
