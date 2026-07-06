@@ -1,0 +1,72 @@
+= sysml-v2-cli
+
+SysML v2 syntax validator for the granule toolchain, built on the
+https://crates.io/crates/sysml-v2-parser[`sysml-v2-parser`] crate.
+
+== Why this exists
+
+The granule toolchain (`granule/00-meta-granule/shared-scripts/syster-*.nu`)
+previously validated `resources.sysml` files with `syster` (`syster-base`/
+`syster-cli`, an alpha-quality, independently-authored SysML v2/KerML parser
+and semantic analyzer). In practice it produced false positives on files
+using only the `ISQ`/`SI` standard library:
+
+* `undefined reference: 'StorageCapacityValue'` even with
+  `private import ISQ::*;` in scope — its stdlib symbol resolution is
+  incomplete.
+* A parse error on `out item state : T;` — it mis-handled `state` as an
+  ordinary identifier in that position.
+
+`sysml-v2-parser` is syntax-only: it never attempts import or stdlib
+resolution (its `DiagnosticCategory::UnresolvedSymbol` exists only for
+callers to classify their own semantic findings — the parser itself never
+emits it). That means this tool cannot catch type errors, but it also
+cannot produce that class of false positive. This mirrors the migration
+already done for `granule/channel-adapter`'s `sysml-emit` crate (commit
+`9c68329c`, "switched to sysml-v2-parser").
+
+== Usage
+
+[source,bash]
+----
+sysml-v2-cli resources.sysml
+sysml-v2-cli --json resources.sysml other.sysml   # structured output
+----
+
+Exit code `0` means every given file parsed with no errors; `1` means at
+least one did. Output goes to stdout either way.
+
+== Known upstream limitation
+
+`sysml-v2-parser` 0.29.0 mis-tracks brace nesting when a usage's inline
+redefinition body has its closing `}` on the same line as the last
+statement inside it, e.g.:
+
+[source,sysml]
+----
+port cameraOut : P { attribute address : String = "tcp://*:5555"; }
+----
+
+This is reported as a spurious `missing closing '}'` at end of file. Put
+the closing brace on its own line to work around it:
+
+[source,sysml]
+----
+port cameraOut : P {
+    attribute address : String = "tcp://*:5555";
+}
+----
+
+`tests/lint.rs::same_line_inline_redefinition_body_is_a_known_parser_limitation`
+documents this; if it starts failing, the upstream bug has been fixed and
+`resources.sysml` files can go back to the single-line form if desired.
+
+== Development
+
+[source,bash]
+----
+cargo build --release
+cargo test
+cargo clippy -- -D warnings
+cargo fmt
+----
