@@ -308,6 +308,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ddb117e43bbf7dacf0a4190fef4d345b9bad68dfc649cb349e7d17d28428e51"
 dependencies = [
  "clap_builder",
+ "clap_derive",
 ]
 
 [[package]]
@@ -321,6 +322,18 @@ dependencies = [
  "clap_lex",
  "strsim",
  "terminal_size",
+]
+
+[[package]]
+name = "clap_derive"
+version = "4.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2ce8604710f6733aa641a2b3731eaa1e8b3d9973d5e3565da11800813f997a9"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1225,7 +1238,8 @@ dependencies = [
  "nu-plugin",
  "nu-protocol",
  "serde_json",
- "sysml-v2-parser",
+ "sysml-v2-cli",
+ "sysml-v2-parser 0.32.0",
 ]
 
 [[package]]
@@ -1829,6 +1843,28 @@ dependencies = [
  "objc2-io-kit",
  "objc2-open-directory",
  "windows",
+]
+
+[[package]]
+name = "sysml-v2-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "sysml-v2-parser 0.29.0",
+]
+
+[[package]]
+name = "sysml-v2-parser"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12e4c16082d6538086b8d983fbe6658944cebe0e2393f5318684e934624f6265"
+dependencies = [
+ "log",
+ "nom 8.0.0",
+ "nom_locate",
 ]
 
 [[package]]
