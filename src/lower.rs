@@ -465,6 +465,20 @@ fn lower_mult(m: Option<&Multiplicity>) -> EmitMult {
 // Main entry point
 // ---------------------------------------------------------------------------
 
+/// Parse the first `package <Name>` or `package <Name> {` from SysML source.
+pub fn parse_package_name(source: &str) -> Option<String> {
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("package ") {
+            let name = rest.trim().trim_end_matches('{').trim();
+            if !name.is_empty() {
+                return Some(name.to_owned());
+            }
+        }
+    }
+    None
+}
+
 /// Lower a single SysML v2 source string into an [`EmitModel`].
 ///
 /// `package_name` is the SysML package identifier (e.g. `"CotDetailMsg"`).

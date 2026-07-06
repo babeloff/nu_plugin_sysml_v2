@@ -17,16 +17,12 @@
 //! `emit_xsd`) is generic SysML v2 processing, not specific to any one
 //! granule package.
 
-mod emit_proto;
-mod emit_xsd;
-mod lint;
-mod lower;
-
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
+use sysml_v2_cli::lint;
 
 #[derive(Parser)]
 #[command(
@@ -102,7 +98,11 @@ mod emit {
 
     use anyhow::{Context, Result};
 
-    use crate::{emit_proto::emit_proto, emit_xsd::emit_xsd, lower::lower_file};
+    use sysml_v2_cli::{
+        emit_proto::emit_proto,
+        emit_xsd::emit_xsd,
+        lower::{lower_file, parse_package_name},
+    };
 
     #[allow(clippy::too_many_arguments)]
     pub fn run(
@@ -166,20 +166,6 @@ mod emit {
         }
 
         Ok(())
-    }
-
-    /// Parse the first `package <Name>` or `package <Name> {` from the SysML source.
-    fn parse_package_name(source: &str) -> Option<String> {
-        for line in source.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("package ") {
-                let name = rest.trim().trim_end_matches('{').trim();
-                if !name.is_empty() {
-                    return Some(name.to_owned());
-                }
-            }
-        }
-        None
     }
 
     /// Only write to disk when the content has changed (avoids spurious rebuilds).

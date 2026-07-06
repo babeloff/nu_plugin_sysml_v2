@@ -10,17 +10,17 @@ use sysml_v2_parser::{parse_for_editor, ParseError};
 // `sysml_v2_parser::ParseError` does not itself derive `Serialize` (only the
 // `DiagnosticSeverity`/`DiagnosticCategory` enums nested inside it do), so we
 // mirror the fields we care about into our own DTO for JSON output.
-#[derive(Serialize)]
-struct ErrorReport {
-    message: String,
-    line: Option<u32>,
-    column: Option<usize>,
-    severity: Option<String>,
-    category: Option<String>,
-    code: Option<String>,
-    expected: Option<String>,
-    found: Option<String>,
-    suggestion: Option<String>,
+#[derive(Serialize, Clone)]
+pub struct ErrorReport {
+    pub message: String,
+    pub line: Option<u32>,
+    pub column: Option<usize>,
+    pub severity: Option<String>,
+    pub category: Option<String>,
+    pub code: Option<String>,
+    pub expected: Option<String>,
+    pub found: Option<String>,
+    pub suggestion: Option<String>,
 }
 
 impl From<&ParseError> for ErrorReport {
@@ -46,16 +46,28 @@ struct FileReport {
     errors: Vec<ErrorReport>,
 }
 
+/// Lint a single in-memory SysML v2 source string.
+///
+/// Returns `(ok, errors)` — `ok` is `true` when the source parses without
+/// syntax errors. This is the reusable core behind both the CLI's per-file
+/// loop and the `nu_plugin_sysml_v2` `lint sysml` plugin command.
+pub fn lint_source(source: &str) -> (bool, Vec<ErrorReport>) {
+    let result = parse_for_editor(source);
+    let ok = result.is_ok();
+    let errors = result.errors.iter().map(ErrorReport::from).collect();
+    (ok, errors)
+}
+
 pub fn run(files: Vec<PathBuf>, json: bool) -> Result<ExitCode> {
     let mut reports = Vec::with_capacity(files.len());
     for file in &files {
         let source = std::fs::read_to_string(file)
             .with_context(|| format!("failed to read {}", file.display()))?;
-        let result = parse_for_editor(&source);
+        let (ok, errors) = lint_source(&source);
         reports.push(FileReport {
             file: file.clone(),
-            ok: result.is_ok(),
-            errors: result.errors.iter().map(ErrorReport::from).collect(),
+            ok,
+            errors,
         });
     }
 
