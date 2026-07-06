@@ -1,0 +1,15 @@
+[workspace]
+authors = ["Fredrick Eisele <fred.eisele@vanderbilt.edu>"]
+channels = ["https://prefix.dev/meso-forge", "conda-forge"]
+name = "nu_plugin_sysml_v2"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+build = "rattler-build build --recipe recipe/recipe.yaml --output-dir output"
+build-debug = "rattler-build build --recipe recipe/recipe.yaml --output-dir output -vv --keep-build"
+render = "rattler-build build --recipe recipe/recipe.yaml --render-only"
+clean-build = "rm -rf output"
+
+[dependencies]
+rattler-build = ">=0.68.0,<0.69"

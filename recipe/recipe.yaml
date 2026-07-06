@@ -1,0 +1,52 @@
+context:
+  version: "0.1.0"
+
+package:
+  name: nu_plugin_sysml_v2
+  version: ${{ version }}
+
+source:
+  # TODO: sha256 below is a placeholder until v${{ version }} is tagged and pushed
+  url: https://github.com/babeloff/nu_plugin_sysml_v2/archive/refs/tags/v${{ version }}.tar.gz
+  # TODO: fill in after tagging the release, e.g.:
+  #   sha256sum v${{ version }}.tar.gz
+  sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+
+build:
+  number: 0
+  script:
+    env:
+      CARGO_PROFILE_RELEASE_STRIP: symbols
+      CARGO_PROFILE_RELEASE_LTO: fat
+    content:
+      - if: unix
+        then: |
+          cargo-bundle-licenses --format yaml --output ${SRC_DIR}/THIRDPARTY.yml
+          cargo auditable install --locked --no-track --path . --root ${PREFIX}
+        else: |
+          cargo-bundle-licenses --format yaml --output %SRC_DIR%\THIRDPARTY.yml
+          cargo auditable install --locked --no-track --path . --root %LIBRARY_PREFIX%
+
+requirements:
+  build:
+    - ${{ compiler('rust') }}
+    - cargo-bundle-licenses
+    - cargo-auditable
+
+tests:
+  - script:
+      - nu_plugin_sysml_v2
+
+about:
+  homepage: https://github.com/babeloff/nu_plugin_sysml_v2
+  license: MIT
+  license_file: LICENSE
+  summary: Parse SysML v2 textual notation into structured Nushell data
+  description: |
+    A Nushell plugin that parses SysML v2 textual notation (via sysml-v2-parser)
+    into structured Nu values, so models can be queried with `where`, `select`,
+    and the rest of Nushell's table/record pipeline.
+
+extra:
+  recipe-maintainers:
+    - phreed
