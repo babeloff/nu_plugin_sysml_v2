@@ -13,6 +13,16 @@ Validate SysML v2 file syntax.
 
 | `--json`
 | Emit a JSON array instead of human-readable text.
+
+| `--resolve-imports`
+| Additionally resolve `import` statements against `--lib-dir` and flag
+  unresolved imports/references (category `UnresolvedSymbol`). Off by
+  default — see xref:../how-to/resolve-imports-against-a-library.adoc[how
+  to resolve imports against ISQ/SI].
+
+| `--lib-dir <dir>`
+| Directory to search for importable SysML files (repeatable). Only used
+  with `--resolve-imports`.
 |===
 
 *Text output* (default): one line per file (`<path>: ok`, or one line per
@@ -42,7 +52,9 @@ error as `<path>:<line>:<col>: <message>`), followed by a summary line
 }
 ----
 
-*Exit code*: `0` if every file parsed with no errors, `1` otherwise.
+*Exit code*: `0` if every file parsed with no errors, `1` otherwise. With
+`--resolve-imports`, an unresolved import or reference also counts as an
+error for this purpose.
 
 == `sysml-v2-cli emit <files>...`
 
@@ -68,6 +80,17 @@ Generate `.proto` and `.xsd` files from SysML v2 message schemas.
 | `--xsd-out <file>`
 | Write the `.xsd` output to this exact path. Same single-input caveat as
   `--proto-out`.
+
+| `--resolve-imports`
+| Derive cross-package `.proto`/`.xsd` imports from `--lib-dir` (using the
+  resolved file's own filename stem) instead of the hardcoded granule
+  package table. Falls back to that table for any package `--lib-dir`
+  doesn't resolve. Also prints unresolved imports/references to stderr as
+  warnings. Off by default.
+
+| `--lib-dir <dir>`
+| Directory to search for importable SysML files (repeatable). Only used
+  with `--resolve-imports`.
 |===
 
 `--proto-out`/`--xsd-out` take precedence over `--proto-dir`/`--xsd-dir`

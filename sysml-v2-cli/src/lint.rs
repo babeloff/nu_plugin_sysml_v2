@@ -58,12 +58,75 @@ pub fn lint_source(source: &str) -> (bool, Vec<ErrorReport>) {
     (ok, errors)
 }
 
+/// Like [`lint_source`], but also resolves `source`'s `import` statements
+/// against `index` and flags unresolved imports/references — see
+/// `crate::resolve`. Opt-in (CLI `--resolve-imports`/`--lib-dir`, plugin
+/// equivalent): plain [`lint_source`] never changes behavior.
+pub fn lint_source_with_imports(
+    source: &str,
+    index: &crate::resolve::LibraryIndex,
+) -> (bool, Vec<ErrorReport>) {
+    let (mut ok, mut errors) = lint_source(source);
+    let resolved = crate::resolve::resolve_imports(source, index);
+
+    for u in &resolved.unresolved_imports {
+        ok = false;
+        errors.push(ErrorReport {
+            message: format!("unresolved import: {}", u.target),
+            line: Some(u.line),
+            column: Some(u.column),
+            severity: None,
+            category: Some("UnresolvedSymbol".to_owned()),
+            code: Some("unresolved_import".to_owned()),
+            expected: None,
+            found: None,
+            suggestion: None,
+        });
+    }
+
+    for u in &resolved.unresolved_references {
+        ok = false;
+        errors.push(ErrorReport {
+            message: format!("unresolved reference to {} (from {})", u.target, u.symbol),
+            line: Some(u.line),
+            column: Some(u.column),
+            severity: None,
+            category: Some("UnresolvedSymbol".to_owned()),
+            code: Some("unresolved_reference".to_owned()),
+            expected: None,
+            found: None,
+            suggestion: None,
+        });
+    }
+
+    (ok, errors)
+}
+
 pub fn run(files: Vec<PathBuf>, json: bool) -> Result<ExitCode> {
+    run_impl(files, json, None)
+}
+
+/// Like [`run`], but resolves each file's `import` statements against a
+/// [`crate::resolve::LibraryIndex`] built from `lib_dirs`.
+pub fn run_with_imports(files: Vec<PathBuf>, json: bool, lib_dirs: &[PathBuf]) -> Result<ExitCode> {
+    let index = crate::resolve::LibraryIndex::build(lib_dirs)
+        .context("failed to scan --lib-dir directories")?;
+    run_impl(files, json, Some(&index))
+}
+
+fn run_impl(
+    files: Vec<PathBuf>,
+    json: bool,
+    index: Option<&crate::resolve::LibraryIndex>,
+) -> Result<ExitCode> {
     let mut reports = Vec::with_capacity(files.len());
     for file in &files {
         let source = std::fs::read_to_string(file)
             .with_context(|| format!("failed to read {}", file.display()))?;
-        let (ok, errors) = lint_source(&source);
+        let (ok, errors) = match index {
+            Some(index) => lint_source_with_imports(&source, index),
+            None => lint_source(&source),
+        };
         reports.push(FileReport {
             file: file.clone(),
             ok,

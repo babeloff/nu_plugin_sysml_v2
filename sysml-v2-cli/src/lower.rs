@@ -8,10 +8,16 @@
 //! is channel-adapter-specific, but the AST-walking/lowering machinery
 //! itself is generic SysML v2 processing, so it now lives alongside the
 //! rest of the granule toolchain's SysML tooling in `sysml-v2-cli`.
+//!
+//! Also home to the AST-walking helpers ([`collect_package_names`],
+//! [`collect_import_targets`]) that [`crate::resolve`] builds its
+//! namespace-to-file library index and import resolution on top of.
+
+use std::path::PathBuf;
 
 use sysml_v2_parser::ast::{
-    AttributeBody, AttributeBodyElement, EnumerationBody, Identification, Node, PackageBody,
-    PartDefBody,
+    AttributeBody, AttributeBodyElement, EnumerationBody, Identification, Import, Node,
+    PackageBody, PartDefBody,
 };
 use sysml_v2_parser::{parse_for_editor, PackageBodyElement, PartDefBodyElement, RootElement};
 
@@ -24,6 +30,8 @@ pub enum SymbolKind {
     EnumerationDefinition,
     EnumerationVariant,
     ItemDefinition,
+    /// `attribute def` — e.g. ISQ/SI quantity-kind and unit definitions.
+    AttributeDefinition,
     AttributeUsage,
     ItemUsage,
 }
@@ -55,6 +63,9 @@ pub struct HirSymbol {
     pub doc: Option<String>,
     pub multiplicity: Option<Multiplicity>,
     pub relationships: Vec<HirRelationship>,
+    /// `(line, column)` of the declaration, 1-based — used to locate
+    /// unresolved-reference diagnostics (see [`crate::resolve`]).
+    pub span: (u32, usize),
 }
 
 // ---------------------------------------------------------------------------
@@ -66,11 +77,20 @@ pub fn file_symbols_from_text(source: &str) -> Vec<HirSymbol> {
     let result = parse_for_editor(source);
     let mut symbols = Vec::new();
     for elem in &result.root.elements {
-        if let RootElement::Package(node) = &elem.value {
-            let pkg_name = ident_name(&node.identification);
-            if let PackageBody::Brace { elements } = &node.body {
-                collect_pkg_symbols(elements, &pkg_name, &mut symbols);
+        match &elem.value {
+            RootElement::Package(node) => {
+                let pkg_name = ident_name(&node.identification);
+                if let PackageBody::Brace { elements } = &node.body {
+                    collect_pkg_symbols(elements, &pkg_name, &mut symbols);
+                }
             }
+            RootElement::LibraryPackage(node) => {
+                let pkg_name = ident_name(&node.identification);
+                if let PackageBody::Brace { elements } = &node.body {
+                    collect_pkg_symbols(elements, &pkg_name, &mut symbols);
+                }
+            }
+            _ => {}
         }
     }
     symbols
@@ -82,6 +102,7 @@ fn collect_pkg_symbols(
     out: &mut Vec<HirSymbol>,
 ) {
     for elem in elements {
+        let span = (elem.span.line, elem.span.column);
         match &elem.value {
             PackageBodyElement::EnumDef(node) => {
                 let name = ident_name(&node.identification);
@@ -96,8 +117,9 @@ fn collect_pkg_symbols(
                     doc: None,
                     multiplicity: None,
                     relationships: vec![],
+                    span,
                 });
-                collect_enum_variants(&node.body, &qname, out);
+                collect_enum_variants(&node.body, &qname, span, out);
             }
             PackageBodyElement::ItemDef(node) => {
                 let name = ident_name(&node.identification);
@@ -112,6 +134,7 @@ fn collect_pkg_symbols(
                     doc: None,
                     multiplicity: None,
                     relationships: vec![],
+                    span,
                 });
                 if let AttributeBody::Brace { elements } = &node.body {
                     collect_attr_body_symbols(elements, &qname, out);
@@ -130,12 +153,49 @@ fn collect_pkg_symbols(
                     doc: None,
                     multiplicity: None,
                     relationships: vec![],
+                    span,
                 });
                 if let PartDefBody::Brace { elements } = &node.body {
                     collect_partdef_body_symbols(elements, &qname, out);
                 }
             }
+            PackageBodyElement::AttributeDef(node) => {
+                let name = node.name.trim_matches('\'').to_owned();
+                if name.is_empty() {
+                    continue;
+                }
+                let qname = qualify(parent_qname, &name);
+                let relationships = node
+                    .typing
+                    .clone()
+                    .map(|target| {
+                        vec![HirRelationship {
+                            kind: RelationshipKind::TypedBy,
+                            target,
+                        }]
+                    })
+                    .unwrap_or_default();
+                out.push(HirSymbol {
+                    name: name.clone(),
+                    qualified_name: qname.clone(),
+                    kind: SymbolKind::AttributeDefinition,
+                    doc: None,
+                    multiplicity: None,
+                    relationships,
+                    span,
+                });
+                if let AttributeBody::Brace { elements } = &node.body {
+                    collect_attr_body_symbols(elements, &qname, out);
+                }
+            }
             PackageBodyElement::Package(node) => {
+                let name = ident_name(&node.identification);
+                let qname = qualify(parent_qname, &name);
+                if let PackageBody::Brace { elements } = &node.body {
+                    collect_pkg_symbols(elements, &qname, out);
+                }
+            }
+            PackageBodyElement::LibraryPackage(node) => {
                 let name = ident_name(&node.identification);
                 let qname = qualify(parent_qname, &name);
                 if let PackageBody::Brace { elements } = &node.body {
@@ -153,6 +213,7 @@ fn collect_partdef_body_symbols(
     out: &mut Vec<HirSymbol>,
 ) {
     for elem in elements {
+        let span = (elem.span.line, elem.span.column);
         match &elem.value {
             PartDefBodyElement::AttributeUsage(node) => {
                 let name = node.name.trim_matches('\'').to_owned();
@@ -171,6 +232,7 @@ fn collect_partdef_body_symbols(
                         kind: RelationshipKind::TypedBy,
                         target: typed_by,
                     }],
+                    span,
                 });
             }
             PartDefBodyElement::ItemUsage(node) => {
@@ -191,6 +253,7 @@ fn collect_partdef_body_symbols(
                         kind: RelationshipKind::TypedBy,
                         target: typed_by,
                     }],
+                    span,
                 });
             }
             PartDefBodyElement::ItemDef(node) => {
@@ -206,6 +269,7 @@ fn collect_partdef_body_symbols(
                     doc: None,
                     multiplicity: None,
                     relationships: vec![],
+                    span,
                 });
                 if let AttributeBody::Brace { elements } = &node.body {
                     collect_attr_body_symbols(elements, &qname, out);
@@ -222,24 +286,61 @@ fn collect_attr_body_symbols(
     out: &mut Vec<HirSymbol>,
 ) {
     for elem in elements {
-        if let AttributeBodyElement::AttributeUsage(node) = &elem.value {
-            let name = node.name.trim_matches('\'').to_owned();
-            if name.is_empty() {
-                continue;
+        let span = (elem.span.line, elem.span.column);
+        match &elem.value {
+            AttributeBodyElement::AttributeUsage(node) => {
+                let name = node.name.trim_matches('\'').to_owned();
+                if name.is_empty() {
+                    continue;
+                }
+                let qname = qualify(parent_qname, &name);
+                let typed_by = node.typing.clone().unwrap_or_default();
+                out.push(HirSymbol {
+                    name,
+                    qualified_name: qname,
+                    kind: SymbolKind::AttributeUsage,
+                    doc: None,
+                    multiplicity: None,
+                    relationships: vec![HirRelationship {
+                        kind: RelationshipKind::TypedBy,
+                        target: typed_by,
+                    }],
+                    span,
+                });
             }
-            let qname = qualify(parent_qname, &name);
-            let typed_by = node.typing.clone().unwrap_or_default();
-            out.push(HirSymbol {
-                name,
-                qualified_name: qname,
-                kind: SymbolKind::AttributeUsage,
-                doc: None,
-                multiplicity: None,
-                relationships: vec![HirRelationship {
-                    kind: RelationshipKind::TypedBy,
-                    target: typed_by,
-                }],
-            });
+            // Nested `attribute def` — ISQ/SI define quantity-kind
+            // hierarchies this way, e.g. `attribute def MassValue :>
+            // ScalarQuantityValue { attribute def ... }`.
+            AttributeBodyElement::AttributeDef(node) => {
+                let name = node.name.trim_matches('\'').to_owned();
+                if name.is_empty() {
+                    continue;
+                }
+                let qname = qualify(parent_qname, &name);
+                let relationships = node
+                    .typing
+                    .clone()
+                    .map(|target| {
+                        vec![HirRelationship {
+                            kind: RelationshipKind::TypedBy,
+                            target,
+                        }]
+                    })
+                    .unwrap_or_default();
+                out.push(HirSymbol {
+                    name: name.clone(),
+                    qualified_name: qname.clone(),
+                    kind: SymbolKind::AttributeDefinition,
+                    doc: None,
+                    multiplicity: None,
+                    relationships,
+                    span,
+                });
+                if let AttributeBody::Brace { elements } = &node.body {
+                    collect_attr_body_symbols(elements, &qname, out);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -247,7 +348,12 @@ fn collect_attr_body_symbols(
 /// Collect enum variant names from an `EnumerationBody`.
 ///
 /// `EnumerationBody::Brace { values: Vec<String> }` — variants are plain strings.
-fn collect_enum_variants(body: &EnumerationBody, parent_qname: &str, out: &mut Vec<HirSymbol>) {
+fn collect_enum_variants(
+    body: &EnumerationBody,
+    parent_qname: &str,
+    span: (u32, usize),
+    out: &mut Vec<HirSymbol>,
+) {
     if let EnumerationBody::Brace { values } = body {
         for raw in values {
             let name = raw.trim_matches('\'').to_owned();
@@ -261,8 +367,101 @@ fn collect_enum_variants(body: &EnumerationBody, parent_qname: &str, out: &mut V
                 doc: None,
                 multiplicity: None,
                 relationships: vec![],
+                span,
             });
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Package-name and import indexing (for crate::resolve)
+// ---------------------------------------------------------------------------
+
+/// Every `package`/`library package` name declared anywhere in `source`
+/// (top-level and nested, fully qualified), so a directory of many small
+/// library files — e.g. an ISQ/SI checkout — can be indexed by every
+/// namespace it defines. See [`crate::resolve::LibraryIndex`].
+pub fn collect_package_names(source: &str) -> Vec<String> {
+    let result = parse_for_editor(source);
+    let mut names = Vec::new();
+    for elem in &result.root.elements {
+        match &elem.value {
+            RootElement::Package(node) => {
+                collect_package_names_rec(&ident_name(&node.identification), &node.body, "", &mut names);
+            }
+            RootElement::LibraryPackage(node) => {
+                collect_package_names_rec(&ident_name(&node.identification), &node.body, "", &mut names);
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+fn collect_package_names_rec(name: &str, body: &PackageBody, parent: &str, out: &mut Vec<String>) {
+    if name.is_empty() {
+        return;
+    }
+    let qname = qualify(parent, name);
+    out.push(qname.clone());
+    if let PackageBody::Brace { elements } = body {
+        for elem in elements {
+            match &elem.value {
+                PackageBodyElement::Package(node) => {
+                    collect_package_names_rec(&ident_name(&node.identification), &node.body, &qname, out);
+                }
+                PackageBodyElement::LibraryPackage(node) => {
+                    collect_package_names_rec(&ident_name(&node.identification), &node.body, &qname, out);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// One `import` statement's target, with the location of its qualified
+/// name (excluding any `::*`/`::**` suffix).
+#[derive(Debug, Clone)]
+pub struct ImportTarget {
+    pub target: String,
+    pub line: u32,
+    pub column: usize,
+}
+
+/// Every `import` statement anywhere in `source` (top-level or nested in
+/// any package/library package body). See [`crate::resolve::resolve_imports`].
+pub fn collect_import_targets(source: &str) -> Vec<ImportTarget> {
+    let result = parse_for_editor(source);
+    let mut out = Vec::new();
+    for elem in &result.root.elements {
+        match &elem.value {
+            RootElement::Import(node) => out.push(import_target(node)),
+            RootElement::Package(node) => collect_import_targets_rec(&node.body, &mut out),
+            RootElement::LibraryPackage(node) => collect_import_targets_rec(&node.body, &mut out),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn collect_import_targets_rec(body: &PackageBody, out: &mut Vec<ImportTarget>) {
+    if let PackageBody::Brace { elements } = body {
+        for elem in elements {
+            match &elem.value {
+                PackageBodyElement::Import(node) => out.push(import_target(node)),
+                PackageBodyElement::Package(node) => collect_import_targets_rec(&node.body, out),
+                PackageBodyElement::LibraryPackage(node) => collect_import_targets_rec(&node.body, out),
+                _ => {}
+            }
+        }
+    }
+}
+
+fn import_target(node: &Node<Import>) -> ImportTarget {
+    ImportTarget {
+        target: node.target.clone(),
+        line: node.target_span.line,
+        column: node.target_span.column,
     }
 }
 
@@ -369,6 +568,18 @@ pub enum EmitMult {
     Optional,
     /// `[0..*]` or `[1..*]` → proto `repeated` field.
     Repeated,
+}
+
+// ---------------------------------------------------------------------------
+// Cross-package import resolution (used by crate::resolve::LibraryIndex)
+// ---------------------------------------------------------------------------
+
+/// Looks up the file that declares a given fully-qualified SysML package
+/// name, so `lower_file_with_resolver` can derive a real cross-package
+/// `.proto`/`.xsd` import instead of guessing from the hardcoded granule
+/// package table below. Implemented by [`crate::resolve::LibraryIndex`].
+pub trait PackageResolver {
+    fn resolve(&self, qualified_package: &str) -> Option<PathBuf>;
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +694,18 @@ pub fn parse_package_name(source: &str) -> Option<String> {
 ///
 /// `package_name` is the SysML package identifier (e.g. `"CotDetailMsg"`).
 pub fn lower_file(source: &str, package_name: impl Into<String>) -> EmitModel {
+    lower_file_with_resolver(source, package_name, None)
+}
+
+/// Like [`lower_file`], but cross-package `.proto`/`.xsd` imports are
+/// derived from `resolver` (when it resolves a referenced package) instead
+/// of the hardcoded granule package table, falling back to that table when
+/// `resolver` is `None` or doesn't resolve a given package.
+pub fn lower_file_with_resolver(
+    source: &str,
+    package_name: impl Into<String>,
+    resolver: Option<&dyn PackageResolver>,
+) -> EmitModel {
     let pkg = package_name.into();
     let proto_package = derive_proto_package(&pkg).to_owned();
     let xsd_namespace = derive_xsd_namespace(&proto_package);
@@ -496,7 +719,7 @@ pub fn lower_file(source: &str, package_name: impl Into<String>) -> EmitModel {
         ..Default::default()
     };
 
-    collect_imports(&symbols, &mut model);
+    collect_imports(&symbols, &mut model, resolver);
 
     for sym in &symbols {
         let depth = sym.qualified_name.chars().filter(|&c| c == ':').count();
@@ -523,28 +746,54 @@ pub fn lower_file(source: &str, package_name: impl Into<String>) -> EmitModel {
 // Import collection
 // ---------------------------------------------------------------------------
 
-fn collect_imports(symbols: &[HirSymbol], model: &mut EmitModel) {
+fn collect_imports(
+    symbols: &[HirSymbol],
+    model: &mut EmitModel,
+    resolver: Option<&dyn PackageResolver>,
+) {
     let mut seen_protos: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut seen_xsd: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for sym in symbols {
         for rel in &sym.relationships {
             let raw = rel.target.as_str();
-            if let Some(sep) = raw.find("::") {
-                let ref_pkg = &raw[..sep];
-                if ref_pkg != model.sysml_name {
-                    if let Some(proto_file) = proto_file_for_package(ref_pkg) {
-                        if seen_protos.insert(proto_file.to_owned()) {
-                            model.proto_imports.push(proto_file.to_owned());
-                        }
-                    }
-                    if let Some(xsd_file) = xsd_file_for_package(ref_pkg) {
-                        let ns = derive_xsd_namespace(derive_proto_package(ref_pkg));
-                        let key = format!("{ns}|{xsd_file}");
-                        if seen_xsd.insert(key) {
-                            model.xsd_imports.push((ns, xsd_file.to_owned()));
-                        }
-                    }
+            let Some(sep) = raw.find("::") else { continue };
+            let ref_pkg = &raw[..sep];
+            if ref_pkg == model.sysml_name {
+                continue;
+            }
+
+            if let Some(path) = resolver.and_then(|r| r.resolve(ref_pkg)) {
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(ref_pkg)
+                    .to_owned();
+                let proto_file = format!("{stem}.proto");
+                if seen_protos.insert(proto_file.clone()) {
+                    model.proto_imports.push(proto_file);
+                }
+                let xsd_file = format!("{stem}.xsd");
+                let ns = derive_xsd_namespace(ref_pkg);
+                let key = format!("{ns}|{xsd_file}");
+                if seen_xsd.insert(key) {
+                    model.xsd_imports.push((ns, xsd_file));
+                }
+                continue;
+            }
+
+            // Fall back to the hardcoded granule message-package table
+            // (no resolver given, or it didn't recognize this package).
+            if let Some(proto_file) = proto_file_for_package(ref_pkg) {
+                if seen_protos.insert(proto_file.to_owned()) {
+                    model.proto_imports.push(proto_file.to_owned());
+                }
+            }
+            if let Some(xsd_file) = xsd_file_for_package(ref_pkg) {
+                let ns = derive_xsd_namespace(derive_proto_package(ref_pkg));
+                let key = format!("{ns}|{xsd_file}");
+                if seen_xsd.insert(key) {
+                    model.xsd_imports.push((ns, xsd_file.to_owned()));
                 }
             }
         }
@@ -680,7 +929,7 @@ pub fn to_snake_case(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::to_snake_case;
+    use super::*;
 
     #[test]
     fn snake_case_basic() {
@@ -692,5 +941,64 @@ mod tests {
         assert_eq!(to_snake_case("xmlDetail"), "xml_detail");
         assert_eq!(to_snake_case("HAE"), "hae");
         assert_eq!(to_snake_case("sendTime"), "send_time");
+    }
+
+    #[test]
+    fn attribute_def_at_package_level_is_indexed() {
+        let src = r#"
+            standard library package ISQ {
+                attribute def MassValue :> ScalarQuantityValue;
+                attribute def LengthValue :> ScalarQuantityValue;
+            }
+        "#;
+        let symbols = file_symbols_from_text(src);
+        assert!(symbols
+            .iter()
+            .any(|s| s.qualified_name == "ISQ::MassValue"
+                && s.kind == SymbolKind::AttributeDefinition));
+        assert!(symbols
+            .iter()
+            .any(|s| s.qualified_name == "ISQ::LengthValue"));
+    }
+
+    #[test]
+    fn nested_attribute_def_is_indexed() {
+        let src = r#"
+            package SI {
+                attribute def Units {
+                    attribute def kg :> Units;
+                }
+            }
+        "#;
+        let symbols = file_symbols_from_text(src);
+        assert!(symbols.iter().any(|s| s.qualified_name == "SI::Units::kg"));
+    }
+
+    #[test]
+    fn collects_package_names_including_nested() {
+        let src = r#"
+            package Outer {
+                package Inner {
+                    attribute def X;
+                }
+            }
+        "#;
+        let names = collect_package_names(src);
+        assert!(names.contains(&"Outer".to_owned()));
+        assert!(names.contains(&"Outer::Inner".to_owned()));
+    }
+
+    #[test]
+    fn collects_import_targets() {
+        let src = r#"
+            package Foo {
+                private import ISQ::*;
+                import SI::kg;
+            }
+        "#;
+        let targets = collect_import_targets(src);
+        let names: Vec<&str> = targets.iter().map(|t| t.target.as_str()).collect();
+        assert!(names.contains(&"ISQ::*"));
+        assert!(names.contains(&"SI::kg"));
     }
 }

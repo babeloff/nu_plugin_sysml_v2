@@ -1,7 +1,7 @@
 = The lint/lower/emit pipeline
 
 Both front ends — the `sysml-v2-cli` binary and the `nu_plugin_sysml_v2`
-Nushell plugin — are thin wrappers around the same four-module library
+Nushell plugin — are thin wrappers around the same library
 (`sysml-v2-cli/src/lib.rs`). Understanding that pipeline explains why the
 two front ends can never drift apart in behavior: there is exactly one
 implementation of "what does this SysML mean," and both front ends call
@@ -64,6 +64,39 @@ decision (scalar vs. message type, required/optional/repeated,
 import filenames) was already made while building the `EmitModel`, so
 adding a third target format would mean writing a third renderer over the
 existing model, not touching `lower.rs` at all.
+
+== Stage 4 — resolve (`resolve.rs`, opt-in)
+
+`resolve.rs` sits *alongside* the pipeline above, not inside it — `lint`
+and `emit` never call into it unless `--resolve-imports` is given (see
+xref:../how-to/resolve-imports-against-a-library.adoc[the how-to guide]
+and xref:why-sysml-v2-parser.adoc[why it's opt-in]). Its `LibraryIndex`
+scans `--lib-dir` directories for `.sysml` files, indexing every
+`package`/`library package` name each declares; `resolve_imports` then
+resolves a file's `import` targets against that index (transitively — a
+resolved library file's own imports are followed too) and cross-checks
+qualified type references against the combined symbol table.
+
+Indexing and resolution reuse `lower.rs`'s `HirSymbol` extraction, but only
+recognize `package`, `library package`, `item def`, `part def`, `enum
+def`, and `attribute def` declarations — the same set `lower_file` already
+understood, plus `attribute def` (needed because ISQ/SI define quantity
+kinds that way, e.g. `attribute def MassValue :> ScalarQuantityValue`) and
+`library package` (needed because the real ISQ/SI files are written as
+`standard library package`, not `package`). Every *other* SysML
+definition kind (`port def`, `requirement def`, `state def`, `action def`,
+…) is invisible to this pass — a reference to one of those would never be
+flagged as unresolved, and never confirmed as resolved either. Widening
+this coverage means adding a match arm per kind in `lower.rs`'s
+`collect_pkg_symbols`, not touching `resolve.rs`.
+
+`lower_file_with_resolver` (what `lower_file` now delegates to) accepts an
+optional `&dyn PackageResolver` — implemented by `LibraryIndex` — so
+`emit --resolve-imports` can derive a cross-package `.proto`/`.xsd` import
+from the real resolved file's stem instead of the hardcoded granule
+package table, without `lower.rs` depending on `resolve.rs` (the trait
+lives in `lower.rs`; `resolve.rs` implements it, keeping the dependency
+one-directional).
 
 == Where the two front ends diverge
 

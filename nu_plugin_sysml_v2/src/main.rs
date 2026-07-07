@@ -1,7 +1,43 @@
+use std::path::PathBuf;
+
 use nu_plugin::{EngineInterface, EvaluatedCall, MsgPackSerializer, Plugin, PluginCommand, serve_plugin};
 use nu_protocol::{record, Category, LabeledError, Signature, Span, SyntaxShape, Type, Value};
-use sysml_v2_cli::{emit_proto::emit_proto, emit_xsd::emit_xsd, lint::lint_source, lower::{lower_file, parse_package_name}};
+use sysml_v2_cli::{
+    emit_proto::emit_proto,
+    emit_xsd::emit_xsd,
+    lint::{lint_source, lint_source_with_imports},
+    lower::{lower_file_with_resolver, parse_package_name, PackageResolver},
+    resolve::LibraryIndex,
+};
 use sysml_v2_parser::{parse, parse_for_editor, ParseError};
+
+/// Read `--resolve-imports`/`--lib-dir` and build a [`LibraryIndex`] when
+/// resolution was requested. `None` means "resolution not requested" —
+/// callers fall back to their unresolved behavior, unchanged.
+fn resolve_index(call: &EvaluatedCall, span: Span) -> Result<Option<LibraryIndex>, LabeledError> {
+    if !call.has_flag("resolve-imports")? {
+        return Ok(None);
+    }
+    let lib_dirs: Vec<String> = call.get_flag("lib-dir")?.unwrap_or_default();
+    let lib_dirs: Vec<PathBuf> = lib_dirs.into_iter().map(PathBuf::from).collect();
+    LibraryIndex::build(&lib_dirs).map(Some).map_err(|e| {
+        LabeledError::new("Failed to scan --lib-dir directories").with_label(e.to_string(), span)
+    })
+}
+
+fn resolve_imports_signature(sig: Signature) -> Signature {
+    sig.switch(
+        "resolve-imports",
+        "Resolve import statements against --lib-dir and flag unresolved imports/references",
+        None,
+    )
+    .named(
+        "lib-dir",
+        SyntaxShape::List(Box::new(SyntaxShape::String)),
+        "Directories to search for importable SysML files (used with --resolve-imports)",
+        None,
+    )
+}
 
 struct SysMlPlugin;
 
@@ -109,9 +145,11 @@ impl PluginCommand for LintSysml {
     }
 
     fn signature(&self) -> Signature {
-        Signature::build(PluginCommand::name(self))
-            .input_output_type(Type::String, Type::Any)
-            .category(Category::Formats)
+        resolve_imports_signature(
+            Signature::build(PluginCommand::name(self))
+                .input_output_type(Type::String, Type::Any)
+                .category(Category::Formats),
+        )
     }
 
     fn run(
@@ -128,7 +166,11 @@ impl PluginCommand for LintSysml {
             LabeledError::new("Expected string input").with_label(err.to_string(), span)
         })?;
 
-        let (ok, errors) = lint_source(source);
+        let index = resolve_index(call, span)?;
+        let (ok, errors) = match &index {
+            Some(index) => lint_source_with_imports(source, index),
+            None => lint_source(source),
+        };
         let errors: Vec<Value> = errors
             .iter()
             .map(|e| error_report_to_value(e, span))
@@ -160,15 +202,17 @@ impl PluginCommand for ToProto {
     }
 
     fn signature(&self) -> Signature {
-        Signature::build(PluginCommand::name(self))
-            .input_output_type(Type::String, Type::String)
-            .named(
-                "name",
-                SyntaxShape::String,
-                "SysML package name to use (default: parsed from the source, else \"model\")",
-                Some('n'),
-            )
-            .category(Category::Formats)
+        resolve_imports_signature(
+            Signature::build(PluginCommand::name(self))
+                .input_output_type(Type::String, Type::String)
+                .named(
+                    "name",
+                    SyntaxShape::String,
+                    "SysML package name to use (default: parsed from the source, else \"model\")",
+                    Some('n'),
+                )
+                .category(Category::Formats),
+        )
     }
 
     fn run(
@@ -190,7 +234,11 @@ impl PluginCommand for ToProto {
             .or_else(|| parse_package_name(source))
             .unwrap_or_else(|| "model".to_owned());
 
-        let model = lower_file(source, pkg_name);
+        let index = resolve_index(call, span)?;
+        let resolver: Option<&dyn PackageResolver> =
+            index.as_ref().map(|i| i as &dyn PackageResolver);
+
+        let model = lower_file_with_resolver(source, pkg_name, resolver);
         let text = emit_proto(&model);
 
         Ok(nu_protocol::PipelineData::value(
@@ -214,15 +262,17 @@ impl PluginCommand for ToXsd {
     }
 
     fn signature(&self) -> Signature {
-        Signature::build(PluginCommand::name(self))
-            .input_output_type(Type::String, Type::String)
-            .named(
-                "name",
-                SyntaxShape::String,
-                "SysML package name to use (default: parsed from the source, else \"model\")",
-                Some('n'),
-            )
-            .category(Category::Formats)
+        resolve_imports_signature(
+            Signature::build(PluginCommand::name(self))
+                .input_output_type(Type::String, Type::String)
+                .named(
+                    "name",
+                    SyntaxShape::String,
+                    "SysML package name to use (default: parsed from the source, else \"model\")",
+                    Some('n'),
+                )
+                .category(Category::Formats),
+        )
     }
 
     fn run(
@@ -244,7 +294,11 @@ impl PluginCommand for ToXsd {
             .or_else(|| parse_package_name(source))
             .unwrap_or_else(|| "model".to_owned());
 
-        let model = lower_file(source, pkg_name);
+        let index = resolve_index(call, span)?;
+        let resolver: Option<&dyn PackageResolver> =
+            index.as_ref().map(|i| i as &dyn PackageResolver);
+
+        let model = lower_file_with_resolver(source, pkg_name, resolver);
         let text = emit_xsd(&model);
 
         Ok(nu_protocol::PipelineData::value(

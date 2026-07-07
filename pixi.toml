@@ -41,6 +41,21 @@ description = "Render/validate the recipe without fetching sources or building"
 cmd = "rm -rf output"
 description = "Remove the rattler-build output directory"
 
+[tasks.fetch-sysml-library]
+cmd = "mkdir -p vendor/sysml.library.kpar && curl -fsSL -o vendor/sysml.library.kpar/SysML_Quantities_and_Units_Library-2.0.0.kpar https://raw.githubusercontent.com/Systems-Modeling/SysML-v2-Release/master/sysml.library.kpar/SysML_Quantities_and_Units_Library-2.0.0.kpar"
+description = "Download the OMG SysML v2 Quantities and Units Library .kpar (contains ISQ/SI) from the SysML-v2-Release repo"
+
+[tasks.expand-sysml-library]
+cmd = "mkdir -p vendor/sysml.library && unzip -o -q vendor/sysml.library.kpar/SysML_Quantities_and_Units_Library-2.0.0.kpar -d vendor/sysml.library"
+depends-on = ["fetch-sysml-library"]
+description = "Expand the .kpar (a zip archive) into vendor/sysml.library/ -- pass that directory to --resolve-imports --lib-dir"
+
+[tasks.clean-sysml-library]
+cmd = "rm -rf vendor"
+description = "Remove the downloaded/expanded sysml.library.kpar files"
+
 [dependencies]
 rust = ">=1.80"
 rattler-build = ">=0.68.0,<0.69"
+curl = "*"
+unzip = "*"

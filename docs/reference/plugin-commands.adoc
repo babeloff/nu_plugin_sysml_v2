@@ -39,6 +39,14 @@ Validate SysML v2 textual notation syntax.
 
 | Input → Output
 | `string` → `any`
+
+| `--resolve-imports`
+| Additionally resolve `import` statements against `--lib-dir` and flag
+  unresolved imports/references. Off by default.
+
+| `--lib-dir [<string> ...]`
+| List of directories to search for importable SysML files. Only used with
+  `--resolve-imports`, e.g. `--resolve-imports --lib-dir [/path/to/isq-si]`.
 |===
 
 Returns `{ok: bool, errors: [...]}`. Each error has `message`, `line`,
@@ -62,6 +70,15 @@ Translate a SysML v2 message schema into protobuf (`.proto`) text.
 | SysML package name to use for the proto `package` and derived imports.
   Default: parsed from the source's first `package Name { ... }`
   declaration, else the literal string `"model"`.
+
+| `--resolve-imports`
+| Derive cross-package `.proto` imports from `--lib-dir` (using the
+  resolved file's own filename stem) instead of the hardcoded granule
+  package table. Off by default.
+
+| `--lib-dir [<string> ...]`
+| List of directories to search for importable SysML files. Only used with
+  `--resolve-imports`.
 |===
 
 Equivalent to `sysml-v2-cli emit`'s `.proto` output, minus the file-stem
@@ -81,6 +98,13 @@ Translate a SysML v2 message schema into an XML Schema (`.xsd`) document.
 | `--name <string>` / `-n`
 | Same as `to proto`'s `--name`: sets the XSD target namespace's source
   package name.
+
+| `--resolve-imports`
+| Same as `to proto`'s `--resolve-imports`, for `xs:import`.
+
+| `--lib-dir [<string> ...]`
+| List of directories to search for importable SysML files. Only used with
+  `--resolve-imports`.
 |===
 
 Equivalent to `sysml-v2-cli emit`'s `.xsd` output.

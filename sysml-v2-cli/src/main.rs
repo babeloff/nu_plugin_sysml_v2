@@ -11,6 +11,12 @@
 //! their own semantic findings). That means `lint` cannot catch type errors,
 //! but it also cannot produce that class of false positive.
 //!
+//! `--resolve-imports`/`--lib-dir` opts into an additional, separate check
+//! (see `sysml_v2_cli::resolve`): resolving `import` statements against a
+//! namespace-to-file library index (e.g. an ISQ/SI checkout) and flagging
+//! unresolved imports/references. It's off by default so plain `lint`/`emit`
+//! can never regress into the class of false positive `syster` produced.
+//!
 //! `emit` was moved here from `channel-adapter/crate/sysml-emit`: reads
 //! SysML v2 message schemas and generates `.proto`/`.xsd` files. The
 //! AST-walking/lowering machinery it depends on (`lower`, `emit_proto`,
@@ -51,6 +57,16 @@ struct LintArgs {
     /// Emit results as JSON instead of human-readable text.
     #[arg(long)]
     json: bool,
+
+    /// Resolve `import` statements against --lib-dir and flag unresolved
+    /// imports/references (see sysml_v2_cli::resolve). Off by default.
+    #[arg(long)]
+    resolve_imports: bool,
+
+    /// Directory to search for importable SysML files (repeatable). Only
+    /// used with --resolve-imports.
+    #[arg(long = "lib-dir")]
+    lib_dirs: Vec<PathBuf>,
 }
 
 #[derive(Args)]
@@ -74,12 +90,28 @@ struct EmitArgs {
     /// Exact output path for the `.xsd` file (single input only).
     #[arg(long)]
     xsd_out: Option<PathBuf>,
+
+    /// Resolve cross-package `.proto`/`.xsd` imports against --lib-dir
+    /// instead of the hardcoded granule package table. Off by default.
+    #[arg(long)]
+    resolve_imports: bool,
+
+    /// Directory to search for importable SysML files (repeatable). Only
+    /// used with --resolve-imports.
+    #[arg(long = "lib-dir")]
+    lib_dirs: Vec<PathBuf>,
 }
 
 fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Lint(args) => lint::run(args.files, args.json),
+        Command::Lint(args) => {
+            if args.resolve_imports {
+                lint::run_with_imports(args.files, args.json, &args.lib_dirs)
+            } else {
+                lint::run(args.files, args.json)
+            }
+        }
         Command::Emit(args) => {
             emit::run(
                 args.files,
@@ -87,6 +119,8 @@ fn main() -> Result<ExitCode> {
                 args.xsd_dir,
                 args.proto_out,
                 args.xsd_out,
+                args.resolve_imports,
+                args.lib_dirs,
             )?;
             Ok(ExitCode::SUCCESS)
         }
@@ -101,7 +135,8 @@ mod emit {
     use sysml_v2_cli::{
         emit_proto::emit_proto,
         emit_xsd::emit_xsd,
-        lower::{lower_file, parse_package_name},
+        lower::{lower_file_with_resolver, parse_package_name, PackageResolver},
+        resolve::LibraryIndex,
     };
 
     #[allow(clippy::too_many_arguments)]
@@ -111,7 +146,17 @@ mod emit {
         xsd_dir: Option<PathBuf>,
         proto_out: Option<PathBuf>,
         xsd_out: Option<PathBuf>,
+        resolve_imports: bool,
+        lib_dirs: Vec<PathBuf>,
     ) -> Result<()> {
+        let index = if resolve_imports {
+            Some(LibraryIndex::build(&lib_dirs).context("failed to scan --lib-dir directories")?)
+        } else {
+            None
+        };
+        let resolver: Option<&dyn PackageResolver> =
+            index.as_ref().map(|i| i as &dyn PackageResolver);
+
         for path in &files {
             let src = std::fs::read_to_string(path)
                 .with_context(|| format!("reading {}", path.display()))?;
@@ -125,7 +170,30 @@ mod emit {
                     .to_owned()
             });
 
-            let model = lower_file(&src, &pkg_name);
+            if let Some(index) = &index {
+                let resolved = sysml_v2_cli::resolve::resolve_imports(&src, index);
+                for u in &resolved.unresolved_imports {
+                    eprintln!(
+                        "warning: {}:{}:{}: unresolved import: {}",
+                        path.display(),
+                        u.line,
+                        u.column,
+                        u.target
+                    );
+                }
+                for u in &resolved.unresolved_references {
+                    eprintln!(
+                        "warning: {}:{}:{}: unresolved reference: {} (from {})",
+                        path.display(),
+                        u.line,
+                        u.column,
+                        u.target,
+                        u.symbol
+                    );
+                }
+            }
+
+            let model = lower_file_with_resolver(&src, &pkg_name, resolver);
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("model");
 
             // ── proto output ─────────────────────────────────────────────

@@ -6,3 +6,4 @@ pub mod emit_proto;
 pub mod emit_xsd;
 pub mod lint;
 pub mod lower;
+pub mod resolve;

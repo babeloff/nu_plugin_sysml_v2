@@ -1,0 +1,107 @@
+= How to resolve imports against ISQ/SI (or any other library)
+
+By default, `lint`/`emit` and the plugin equivalents never look at what an
+`import` statement points to — they accept the syntax and move on (see
+xref:../explanation/why-sysml-v2-parser.adoc[why]). `--resolve-imports`
+opts into an additional, separate check: resolving each `import` against a
+namespace-to-file index built from one or more `--lib-dir` directories, and
+flagging anything that doesn't resolve.
+
+== Get ISQ/SI locally
+
+[source,bash]
+----
+pixi run fetch-sysml-library    # downloads the .kpar (a zip) into vendor/sysml.library.kpar/
+pixi run expand-sysml-library   # unzips it into vendor/sysml.library/ (the .sysml files)
+----
+
+This fetches the OMG SysML v2 Release's
+`SysML_Quantities_and_Units_Library-2.0.0.kpar` — the archive that actually
+contains `ISQ.sysml`/`SI.sysml` — from
+https://github.com/Systems-Modeling/SysML-v2-Release. `vendor/sysml.library/`
+is then a `--lib-dir`-ready directory. `pixi run clean-sysml-library`
+removes both. Neither task's output is committed (`vendor/` is
+`.gitignore`d) — re-run `fetch`/`expand` after cloning.
+
+== Point it at a library checkout
+
+Given `vendor/sysml.library/` from above (or any other directory tree of
+`.sysml` files):
+
+[source,bash]
+----
+sysml-v2-cli lint --resolve-imports --lib-dir vendor/sysml.library resources.sysml
+----
+
+`--lib-dir` is repeatable — pass it multiple times to search several
+directories:
+
+[source,bash]
+----
+sysml-v2-cli lint --resolve-imports \
+  --lib-dir vendor/sysml.library \
+  --lib-dir ./local-defs \
+  resources.sysml
+----
+
+The tool recursively scans each directory for `*.sysml` files and indexes
+every `package`/`library package` name each one declares (top-level and
+nested) — there's nothing to hand-maintain; point it at ISQ/SI's directory
+and `ISQ`, `SI`, and everything else in there becomes resolvable.
+
+== What gets flagged
+
+Two distinct diagnostics, both `category: "UnresolvedSymbol"`:
+
+* `unresolved import: <target>` — the import statement's target package
+  isn't declared by any file under any `--lib-dir`.
+* `unresolved reference to <target> (from <symbol>)` — the target's *base*
+  package *was* resolved, but that specific name wasn't found among its
+  declared symbols (or its own transitive imports' symbols).
+
+A reference whose base package was never imported at all isn't flagged by
+either check — that's a separate, missing-import concern this pass doesn't
+guess at.
+
+[source,nu]
+----
+open --raw resources.sysml | lint sysml --resolve-imports --lib-dir [/path/to/sysml.library]
+----
+
+== Using it with `emit`
+
+`emit --resolve-imports --lib-dir <dir>` additionally changes how
+cross-package `.proto`/`.xsd` imports are derived: instead of the
+hardcoded granule package table (`derive_proto_package`/
+`proto_file_for_package` in `sysml-v2-cli/src/lower.rs`), a resolved
+package's import filename comes from the real file that defines it (e.g.
+`CotEventMsg.sysml` → `import "CotEventMsg.proto";`). Packages `--lib-dir`
+doesn't resolve still fall back to the hardcoded table, so existing
+granule-message emit output is unaffected unless you pass `--lib-dir`.
+Unresolved imports/references are printed to stderr as warnings rather
+than failing the command, since `emit`'s job is to produce output, not
+validate it — use `lint --resolve-imports` for that.
+
+== Scope limits
+
+Indexing and resolution only understand `package`, `library package`,
+`item def`, `part def`, `enum def`, and `attribute def` declarations —
+covers ISQ/SI-style quantity/unit libraries, but not every SysML
+construct. See xref:../explanation/architecture.adoc[the architecture
+explanation] for why, and what "not every construct" means in practice.
+
+A second limit, found by testing against the real library rather than a
+synthetic fixture: the real `ISQ.sysml` is a thin `public import
+ISQBase::*; public import ISQMechanics::*; ...` re-export shell — the
+actual `attribute def MassValue` lives in `ISQBase`, not `ISQ`. This pass
+doesn't follow `public import` re-exports when resolving a qualified
+reference, so `import ISQ::*;` then referencing `ISQ::MassValue` (fully
+qualified) is *not* resolved — only `import ISQBase::*;` then
+`ISQBase::MassValue` is. It also only checks *qualified* (`Pkg::Symbol`)
+references at all; an unqualified reference to a wildcard-imported name
+(the idiom the real library and most downstream SysML actually use, e.g.
+`attribute mass : MassValue;` after `import ISQ::*;`) isn't checked in
+either direction — never flagged as unresolved, but also never confirmed.
+Both are real gaps, not intentional design choices; closing them means
+teaching `resolve_imports` to expand `public import` re-exports and to
+track per-file unqualified scope, not just qualified lookups.

@@ -34,3 +34,22 @@ crate's AST-walking/lowering machinery, moved here because it's generic
 SysML v2 processing rather than specific to any one granule package. See
 xref:architecture.adoc[the architecture explanation] for how that lowering
 pipeline works.
+
+== `--resolve-imports` is the deliberate exception
+
+`--resolve-imports`/`--lib-dir` (see
+xref:../how-to/resolve-imports-against-a-library.adoc[the how-to guide])
+does add import/reference resolution — the exact category of check that
+made `syster` unreliable. It avoids repeating that mistake in two ways
+`syster` didn't:
+
+* *Off by default.* Plain `lint`/`emit` never changes behavior; you have
+  to explicitly ask for the stricter check, so nobody gets a surprise
+  false positive from a check they didn't know was running.
+* *An explicit, inspectable index, not a built-in stdlib model.*
+  `syster`'s incomplete stdlib knowledge was baked into the tool itself,
+  invisible and un-auditable from the outside. `--lib-dir` resolves
+  against whatever `.sysml` files you actually point it at — if
+  `ISQ::StorageCapacityValue` doesn't resolve, the fix is visible and
+  local: your `--lib-dir` doesn't have the file that defines it, not "the
+  tool's model of ISQ is wrong."

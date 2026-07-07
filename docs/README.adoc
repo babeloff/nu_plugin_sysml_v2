@@ -16,8 +16,10 @@ different needs.
 | You have a *specific task* in mind and want the steps, without the
   narrative. See xref:how-to/lint-sysml-files.adoc[linting],
   xref:how-to/generate-proto-and-xsd.adoc[schema generation],
-  xref:how-to/use-the-nushell-plugin.adoc[the Nushell plugin], and
-  xref:how-to/build-conda-packages.adoc[conda packaging].
+  xref:how-to/use-the-nushell-plugin.adoc[the Nushell plugin],
+  xref:how-to/resolve-imports-against-a-library.adoc[resolving imports
+  against ISQ/SI], and xref:how-to/build-conda-packages.adoc[conda
+  packaging].
 
 | reference/
 | You need *precise, exhaustive facts*: flags, command signatures, directory

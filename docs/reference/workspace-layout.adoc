@@ -19,9 +19,10 @@
 │   ├── Cargo.toml
 │   ├── src/
 │   │   ├── main.rs          # clap CLI: lint, emit subcommands
-│   │   ├── lib.rs           # pub mod lint, lower, emit_proto, emit_xsd
+│   │   ├── lib.rs           # pub mod lint, lower, emit_proto, emit_xsd, resolve
 │   │   ├── lint.rs          # lint_source(&str) -> (bool, Vec<ErrorReport>)
 │   │   ├── lower.rs         # AST -> HirSymbol -> EmitModel
+│   │   ├── resolve.rs       # LibraryIndex + resolve_imports (opt-in, --resolve-imports)
 │   │   ├── emit_proto.rs    # EmitModel -> .proto text
 │   │   └── emit_xsd.rs      # EmitModel -> .xsd text
 │   └── tests/
