@@ -1,0 +1,83 @@
+= sysml-v2-cli workspace
+
+A Cargo workspace with two SysML v2 tools sharing one lint/lower/emit
+library, built on the https://crates.io/crates/sysml-v2-parser[`sysml-v2-parser`] crate:
+
+[cols="1,3", options="header"]
+|===
+| Crate | What it is
+
+| `sysml-v2-cli/`
+| A CLI: `lint` validates SysML v2 file syntax; `emit` generates
+  `.proto`/`.xsd` files from SysML v2 message schemas. See
+  link:docs/reference/cli.adoc[the CLI reference].
+
+| `nu_plugin_sysml_v2/`
+| A Nushell plugin exposing the same functionality as pipeline commands:
+  `from sysml`, `lint sysml`, `to proto`, `to xsd`.
+|===
+
+`nu_plugin_sysml_v2` depends on `sysml-v2-cli`'s library directly (not its
+binary), so both front ends always produce identical output — see
+link:docs/explanation/architecture.adoc[the architecture explanation].
+
+== Documentation
+
+Full documentation lives under link:docs/[docs/], organized with
+https://diataxis.fr[Diátaxis]:
+
+* link:docs/tutorials/getting-started.adoc[**Tutorial**] — build the
+  workspace and lint/emit a file both ways, CLI and Nushell.
+* **How-to guides** —
+  link:docs/how-to/lint-sysml-files.adoc[linting],
+  link:docs/how-to/generate-proto-and-xsd.adoc[schema generation],
+  link:docs/how-to/use-the-nushell-plugin.adoc[the Nushell plugin],
+  link:docs/how-to/build-conda-packages.adoc[conda packaging].
+* **Reference** —
+  link:docs/reference/cli.adoc[CLI flags],
+  link:docs/reference/plugin-commands.adoc[plugin command signatures],
+  link:docs/reference/workspace-layout.adoc[directory layout & git remotes].
+* **Explanation** —
+  link:docs/explanation/why-sysml-v2-parser.adoc[why sysml-v2-parser],
+  link:docs/explanation/architecture.adoc[the lint/lower/emit pipeline],
+  link:docs/explanation/why-a-cargo-workspace.adoc[why one workspace, two
+  hosted locations].
+
+== Quick start
+
+[source,bash]
+----
+cargo build
+cargo test
+
+./target/debug/sysml-v2-cli lint resources.sysml
+./target/debug/sysml-v2-cli emit resources.sysml
+----
+
+See link:docs/tutorials/getting-started.adoc[the getting-started tutorial]
+for the Nushell plugin side.
+
+== Development
+
+[source,bash]
+----
+pixi run build       # cargo build, both members
+pixi run test        # cargo test
+pixi run fmt          # cargo fmt
+pixi run clippy       # cargo clippy -- -D warnings
+pixi run build-pkg    # build both conda packages via recipe/recipe.yaml
+----
+
+== A note on this repo's history
+
+This workspace merges what were two separate repositories — a
+granule-toolchain CLI and the standalone `nu_plugin_sysml_v2` Nushell
+plugin (still public at
+https://github.com/babeloff/nu_plugin_sysml_v2) — via `git subtree`, and is
+now hosted as live, cross-remote-linked checkouts in both locations. See
+link:docs/reference/workspace-layout.adoc[the workspace layout reference]
+if you need to sync changes between them.
+
+== License
+
+MIT — see `nu_plugin_sysml_v2/LICENSE`.

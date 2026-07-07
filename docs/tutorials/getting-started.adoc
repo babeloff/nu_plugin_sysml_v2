@@ -1,0 +1,86 @@
+= Getting started
+
+This tutorial walks through building the workspace, then using the same
+lint/emit logic two ways: from the `sysml-v2-cli` binary, and from Nushell
+via `nu_plugin_sysml_v2`. By the end you'll have linted a SysML v2 file and
+generated a `.proto`/`.xsd` pair from it, both ways.
+
+== 1. Build the workspace
+
+From the repo root:
+
+[source,bash]
+----
+cargo build
+----
+
+This builds two binaries: `sysml-v2-cli` and `nu_plugin_sysml_v2`, both
+under `target/debug/`.
+
+== 2. Write a sample SysML v2 file
+
+[source,bash]
+----
+cat > track.sysml <<'EOF'
+package CotDetailMsg {
+    item def Track {
+        attribute course : Real;
+        attribute speed  : Real;
+    }
+}
+EOF
+----
+
+== 3. Lint it with the CLI
+
+[source,bash]
+----
+./target/debug/sysml-v2-cli lint track.sysml
+----
+
+You should see `track.sysml: ok`. Introduce a syntax error (delete a closing
+brace) and re-run it — you'll get a location and message instead, and the
+process exits non-zero.
+
+== 4. Generate .proto and .xsd with the CLI
+
+[source,bash]
+----
+./target/debug/sysml-v2-cli emit track.sysml
+----
+
+Prints a `.proto` and an `.xsd` for the `Track` message to stdout. Add
+`--proto-dir out/ --xsd-dir out/` to write files instead.
+
+== 5. Do the same from Nushell
+
+Register the plugin (once per machine, or after rebuilding it):
+
+[source,nu]
+----
+plugin add target/debug/nu_plugin_sysml_v2
+----
+
+Then, in a *new* Nushell invocation (registration doesn't take effect until
+the next script/session):
+
+[source,nu]
+----
+plugin use sysml_v2
+open --raw track.sysml | lint sysml
+open --raw track.sysml | to proto
+open --raw track.sysml | to xsd
+----
+
+NOTE: Use `open --raw`, not `open` — plain `open track.sysml` auto-applies
+`from sysml` (because `.sysml` is now a registered format), handing `lint
+sysml`/`to proto`/`to xsd` a parsed AST record instead of the source text
+they expect.
+
+You should see the same `ok`/errors record and the same proto/xsd text as
+steps 3–4 — both front ends share the same lint/lower/emit library
+(`sysml-v2-cli`'s `src/lib.rs`), so their output is always in sync.
+
+From here: the xref:../how-to/lint-sysml-files.adoc[how-to guides] cover
+each of these tasks in more depth, and xref:../reference/cli.adoc[reference]
+has the full flag list.

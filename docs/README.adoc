@@ -1,0 +1,36 @@
+= Documentation map
+
+This documentation is organized using the
+https://diataxis.fr[Diátaxis] framework: four kinds of writing for four
+different needs.
+
+[cols="1,3", options="header"]
+|===
+| Section | When to read it
+
+| xref:tutorials/getting-started.adoc[Tutorials]
+| You're new here and want to *learn by doing*: build the workspace, lint a
+  file, emit a schema, drive the same tooling from Nushell.
+
+| how-to/
+| You have a *specific task* in mind and want the steps, without the
+  narrative. See xref:how-to/lint-sysml-files.adoc[linting],
+  xref:how-to/generate-proto-and-xsd.adoc[schema generation],
+  xref:how-to/use-the-nushell-plugin.adoc[the Nushell plugin], and
+  xref:how-to/build-conda-packages.adoc[conda packaging].
+
+| reference/
+| You need *precise, exhaustive facts*: flags, command signatures, directory
+  layout. See xref:reference/cli.adoc[CLI reference],
+  xref:reference/plugin-commands.adoc[plugin command reference], and
+  xref:reference/workspace-layout.adoc[workspace layout].
+
+| explanation/
+| You want to *understand why* something is the way it is. See
+  xref:explanation/why-sysml-v2-parser.adoc[why sysml-v2-parser],
+  xref:explanation/architecture.adoc[the lint/lower/emit pipeline], and
+  xref:explanation/why-a-cargo-workspace.adoc[why this is one workspace].
+|===
+
+TIP: Tutorials and how-to guides assume you've read nothing else first;
+reference and explanation assume you already know your way around.

@@ -1,0 +1,49 @@
+= Why this is one Cargo workspace, hosted in two places
+
+`sysml-v2-cli` and `nu_plugin_sysml_v2` started as two separate
+repositories: a granule-toolchain-internal CLI with no packaging/release
+concerns, and a standalone public Nushell plugin with its own GitHub
+repo, release tags, and conda recipe. They were merged into one Cargo
+workspace once the plugin needed to reuse the CLI's lint/lower/emit logic
+(see xref:architecture.adoc[the architecture explanation] for why that
+reuse is a direct library dependency rather than shelling out).
+
+== Why not a cross-repo path dependency
+
+The first version of this reuse used a `path` dependency in
+`nu_plugin_sysml_v2/Cargo.toml` pointing at the other repo's checkout on
+disk. It worked for local `cargo build`, but broke the plugin's conda
+packaging: `recipe/recipe.yaml` fetched a GitHub release tarball and ran
+`cargo install --path .` against it, and a path dependency pointing outside
+that tarball can't resolve during a from-scratch build (CI, or anyone
+else's machine) — only on a machine that happens to have both repos
+checked out side by side, in the right relative location.
+
+A single Cargo workspace fixes this structurally: one `Cargo.lock`, one
+source tree, and — after also moving `recipe/recipe.yaml` to the workspace
+root and pointing its `source:` at a local `path` instead of a release
+tarball URL (see xref:../how-to/build-conda-packages.adoc[building the
+conda packages]) — one buildable unit with no dependency on anything
+outside itself.
+
+== Why hosted in two locations instead of picking one
+
+The CLI's natural home is alongside the rest of the granule toolchain; the
+plugin's natural home is its existing public GitHub repository, with its
+release tags and conda-forge-style recipe already pointing at it. Neither
+home was clearly "more correct" than the other, so instead of choosing one
+and orphaning the other's history/remote, both locations were kept as live
+checkouts of the same merged history, cross-registered as git remotes of
+each other (see xref:../reference/workspace-layout.adoc[the workspace
+layout reference] for the exact remote names). The public GitHub remote on
+the plugin's checkout is untouched — anyone already depending on
+`github.com/babeloff/nu_plugin_sysml_v2` sees no change in where its
+history lives — while the granule-toolchain checkout gets the CLI in its
+expected home too.
+
+The cost of this approach is that changes must be explicitly synced between
+the two locations (`git push`/`git pull` against the cross-registered
+remote) rather than there being one canonical remote everyone pushes to.
+That's a deliberate trade against the alternative of migrating the
+public plugin's history to a new location, which would break existing
+clones/forks/CI configured against its current GitHub URL.

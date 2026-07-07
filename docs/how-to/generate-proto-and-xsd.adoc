@@ -1,0 +1,59 @@
+= How to generate .proto and .xsd from a SysML v2 schema
+
+== Print to stdout (default)
+
+[source,bash]
+----
+sysml-v2-cli emit resources.sysml
+----
+
+Prints the `.proto` text, then the `.xsd` text, each preceded by a
+`// ── <stem>.<ext> ──` marker line. With multiple input files, each file's
+pair is printed in turn.
+
+== Write to files instead
+
+[source,bash]
+----
+sysml-v2-cli emit resources.sysml --proto-dir generated/proto --xsd-dir generated/xsd
+----
+
+Writes `generated/proto/resources.proto` and `generated/xsd/resources.xsd`.
+Files are only rewritten when their content actually changed, so this is
+safe to run in a build script without spuriously invalidating downstream
+build caches.
+
+For a single input file, `--proto-out`/`--xsd-out` name the output file
+exactly instead of deriving it from the input's stem:
+
+[source,bash]
+----
+sysml-v2-cli emit resources.sysml --proto-out build/schema.proto --xsd-out build/schema.xsd
+----
+
+== How the package name is chosen
+
+The generated `.proto` package and `.xsd` target namespace are derived from
+the first `package Name { ... }` declaration in the source file. If the
+file has no package declaration, the CLI falls back to the input file's
+stem (e.g. `resources.sysml` → package `resources`).
+
+== Do the same from Nushell
+
+[source,nu]
+----
+open --raw resources.sysml | to proto
+open --raw resources.sysml | to xsd
+----
+
+The plugin has no file path to fall back on, so if the source has no
+`package` declaration, it falls back to the literal name `model` instead of
+a file stem. Override it explicitly with `--name`/`-n`:
+
+[source,nu]
+----
+open --raw resources.sysml | to proto --name CotDetailMsg
+----
+
+See xref:../reference/plugin-commands.adoc[the plugin command reference]
+for the full flag list.

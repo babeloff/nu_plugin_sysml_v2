@@ -1,0 +1,98 @@
+= Workspace layout reference
+
+== Directory structure
+
+[source]
+----
+.
+├── Cargo.toml              # [workspace] manifest — members below
+├── Cargo.lock              # single lock file for the whole workspace
+├── pixi.toml               # dev tasks (cargo build/test/fmt/clippy) +
+│                            # packaging tasks (build-pkg/render-pkg/...)
+├── README.adoc             # this workspace's top-level README
+├── docs/                   # you are here (Diátaxis documentation)
+├── recipe/
+│   ├── recipe.yaml          # multi-output rattler-build recipe:
+│   │                        #   outputs: sysml-v2-cli, nu_plugin_sysml_v2
+│   └── conda_build_config.yaml
+├── sysml-v2-cli/            # crate: CLI binary + shared lib
+│   ├── Cargo.toml
+│   ├── src/
+│   │   ├── main.rs          # clap CLI: lint, emit subcommands
+│   │   ├── lib.rs           # pub mod lint, lower, emit_proto, emit_xsd
+│   │   ├── lint.rs          # lint_source(&str) -> (bool, Vec<ErrorReport>)
+│   │   ├── lower.rs         # AST -> HirSymbol -> EmitModel
+│   │   ├── emit_proto.rs    # EmitModel -> .proto text
+│   │   └── emit_xsd.rs      # EmitModel -> .xsd text
+│   └── tests/
+└── nu_plugin_sysml_v2/       # crate: Nushell plugin binary
+    ├── Cargo.toml            # depends on sysml-v2-cli via path = "../sysml-v2-cli"
+    ├── LICENSE
+    └── src/main.rs           # from sysml, lint sysml, to proto, to xsd
+----
+
+`nu_plugin_sysml_v2` depends on `sysml-v2-cli`'s library (not its binary):
+it calls `lint::lint_source`, `lower::{lower_file, parse_package_name}`,
+`emit_proto::emit_proto`, and `emit_xsd::emit_xsd` directly, so both front
+ends always produce identical output — see
+xref:../explanation/architecture.adoc[the architecture explanation].
+
+== This repository is hosted at two locations
+
+This workspace originated as two separate repositories — a granule-toolchain
+CLI and a standalone public Nushell plugin — that were merged via
+`git subtree`. Both locations now share one commit history and are kept in
+sync via direct git remotes rather than one being canonical:
+
+[cols="1,2,2", options="header"]
+|===
+| Location | Purpose | Remotes
+
+| `k8s/dains/granule/sysml-v2-cli/`
+| Granule-toolchain-facing checkout
+| `nu_plugin_sysml_v2` → the other location's path
+
+| `sysmlv2/nu_plugin_sysml_v2/`
+| Public-facing checkout
+| `origin` → `github.com/babeloff/nu_plugin_sysml_v2` (unchanged);
+  `sysml-v2-cli` → the other location's path
+|===
+
+Sync changes between them directly, e.g. from the granule-toolchain
+checkout:
+
+[source,bash]
+----
+git push nu_plugin_sysml_v2 main
+git pull nu_plugin_sysml_v2 main
+----
+
+The pre-merge state of the public repo (single flat crate, no workspace) is
+preserved untouched at
+`sysmlv2/nu_plugin_sysml_v2.pre-merge-backup/` for reference.
+
+== Pixi tasks
+
+[cols="1,3", options="header"]
+|===
+| Task | What it does
+
+| `build` / `build-rel`
+| `cargo build` / `cargo build --release` for both workspace members.
+
+| `test`
+| `cargo test` for the whole workspace.
+
+| `fmt` / `clippy`
+| `cargo fmt` / `cargo clippy -- -D warnings`.
+
+| `build-pkg` / `build-pkg-debug`
+| Build both conda packages via `recipe/recipe.yaml`
+  (see xref:../how-to/build-conda-packages.adoc[how-to]).
+
+| `render-pkg`
+| Render/validate the recipe without building.
+
+| `clean-pkg`
+| Remove the `output/` directory.
+|===

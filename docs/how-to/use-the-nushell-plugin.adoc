@@ -1,0 +1,86 @@
+= How to use the Nushell plugin
+
+== Register it
+
+Build it first, then register the binary once (or after every rebuild):
+
+[source,nu]
+----
+cargo build --release
+plugin add target/release/nu_plugin_sysml_v2
+----
+
+Registration writes to Nushell's plugin registry file but doesn't take
+effect in the *current* script or session — open a new Nushell session (or
+start a new `nu -c "..."` invocation) before using the commands:
+
+[source,nu]
+----
+plugin use sysml_v2
+----
+
+== Feed it raw text, not `open`'s auto-parsed result
+
+Once `from sysml` is registered, plain `open foo.sysml` auto-detects the
+`.sysml` extension and runs it through `from sysml` for you — handing
+`lint sysml`/`to proto`/`to xsd` a parsed AST record instead of the source
+string they expect, which fails with `only string input data is supported`.
+Use `open --raw` (or `open foo.sysml --raw`) to get the plain text:
+
+[source,nu]
+----
+open --raw foo.sysml | lint sysml
+----
+
+== Parse a file into structured data
+
+[source,nu]
+----
+open --raw foo.sysml | from sysml
+----
+
+Returns the full AST as a nested Nu record/table, so you can query it with
+`where`, `get`, `select`, etc. Add `--resilient`/`-r` to get a partial AST
+plus a list of errors instead of failing outright on the first syntax
+error:
+
+[source,nu]
+----
+open --raw foo.sysml | from sysml --resilient | get errors
+----
+
+== Validate syntax
+
+[source,nu]
+----
+open --raw foo.sysml | lint sysml
+----
+
+Returns `{ok: bool, errors: [...]}` — each error has `message`, `line`,
+`column`, `severity`, `category`, `code`, `expected`, `found`, and
+`suggestion` fields (`null` where not applicable).
+
+== Generate .proto / .xsd text
+
+[source,nu]
+----
+open --raw foo.sysml | to proto
+open --raw foo.sysml | to xsd
+----
+
+Both accept `--name`/`-n <string>` to override the SysML package name used
+to derive the proto package / XSD namespace, when the source has no
+`package` declaration (or you want a different one) — see
+xref:generate-proto-and-xsd.adoc[generating .proto and .xsd].
+
+== Update after rebuilding
+
+Nushell caches a plugin's signatures after the first `plugin use`. After
+rebuilding the binary, either restart Nushell or run:
+
+[source,nu]
+----
+plugin add target/release/nu_plugin_sysml_v2
+----
+
+again, then start a new session before using it.

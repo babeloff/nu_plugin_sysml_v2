@@ -1,0 +1,63 @@
+= How to lint SysML v2 files
+
+== Lint one or more files
+
+[source,bash]
+----
+sysml-v2-cli lint resources.sysml
+sysml-v2-cli lint a.sysml b.sysml c.sysml
+----
+
+Exit code `0` means every file parsed with no syntax errors; `1` means at
+least one didn't. Both the summary and any error text go to stdout either
+way — nothing goes to stderr.
+
+== Get structured output instead
+
+[source,bash]
+----
+sysml-v2-cli lint --json resources.sysml
+----
+
+Emits a JSON array, one object per input file, each with `file`, `ok`, and
+an `errors` array (see xref:../reference/cli.adoc[the CLI reference] for the
+exact shape). Useful for feeding into `jq` or another script.
+
+== Lint from Nushell instead of the CLI
+
+If you're already in a Nushell pipeline (e.g. iterating over
+`glob **/*.sysml`), use the plugin instead of shelling out:
+
+[source,nu]
+----
+open --raw resources.sysml | lint sysml
+----
+
+Returns a record `{ok, errors}` rather than text — see
+xref:use-the-nushell-plugin.adoc[using the Nushell plugin].
+
+== Work around a known parser limitation
+
+`sysml-v2-parser` 0.29.0 mis-tracks brace nesting when a usage's inline
+redefinition body has its closing `}` on the same line as the last
+statement inside it, e.g.:
+
+[source,sysml]
+----
+port cameraOut : P { attribute address : String = "tcp://*:5555"; }
+----
+
+This is reported as a spurious `missing closing '}'` at end of file, even
+though the SysML is valid. Put the closing brace on its own line to work
+around it:
+
+[source,sysml]
+----
+port cameraOut : P {
+    attribute address : String = "tcp://*:5555";
+}
+----
+
+`sysml-v2-cli/tests/lint.rs::same_line_inline_redefinition_body_is_a_known_parser_limitation`
+documents this; if it starts failing, the upstream bug has been fixed and
+files can go back to the single-line form if desired.

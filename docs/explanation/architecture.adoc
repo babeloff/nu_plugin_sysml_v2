@@ -1,0 +1,76 @@
+= The lint/lower/emit pipeline
+
+Both front ends — the `sysml-v2-cli` binary and the `nu_plugin_sysml_v2`
+Nushell plugin — are thin wrappers around the same four-module library
+(`sysml-v2-cli/src/lib.rs`). Understanding that pipeline explains why the
+two front ends can never drift apart in behavior: there is exactly one
+implementation of "what does this SysML mean," and both front ends call
+into it directly rather than each maintaining their own copy.
+
+== Why one library, two front ends
+
+`nu_plugin_sysml_v2` depends on `sysml-v2-cli` as an ordinary Cargo path
+dependency and calls its public functions directly — it does not shell out
+to the `sysml-v2-cli` binary and parse its output. This was a deliberate
+choice made when the plugin gained `lint sysml`/`to proto`/`to xsd`
+commands: shelling out would mean two places to update every time the
+lint/lower/emit logic changed, and a process-spawn cost on every pipeline
+invocation. A shared library pays neither cost.
+
+== Stage 1 — lint (`lint.rs`)
+
+`lint_source(&str) -> (bool, Vec<ErrorReport>)` calls
+`sysml_v2_parser::parse_for_editor`, which never bails out on the first
+error — it keeps parsing to collect as many diagnostics as it can. This is
+the entire implementation of `sysml-v2-cli lint` and `lint sysml`; both are
+just different ways of presenting this one function's return value (text or
+JSON on the CLI, a Nu record from the plugin).
+
+== Stage 2 — lower (`lower.rs`)
+
+`lower_file(source, package_name) -> EmitModel` does the real work behind
+`emit`/`to proto`/`to xsd`, in two passes:
+
+. *AST → `HirSymbol` list* (`file_symbols_from_text`): walks the
+  `sysml-v2-parser` AST — packages, item defs, attribute usages, item
+  usages, enum defs/variants — into a flat list of symbols, each carrying a
+  fully qualified name (`Pkg::Type::field`), so nesting depth can be
+  recovered later just by counting `::` separators rather than by walking
+  the tree again.
+. *`HirSymbol` list → `EmitModel`*: groups symbols by qualified-name depth
+  into a tree of `EmitDef::{Enum, Message}` with typed, multiplicity-aware
+  fields (`EmitMult::{Required, Optional, Repeated}`), and collects
+  cross-package `proto_imports`/`xsd_imports` from any `TypedBy`
+  relationship that points outside the current package.
+
+This is a deliberate re-implementation of what used to be
+`syster::hir::file_symbols_from_text` — the HIR types here
+(`HirSymbol`, `SymbolKind`, `RelationshipKind`) exist purely to replace that
+dependency, not because this crate needs a general-purpose HIR.
+
+== Stage 3 — emit (`emit_proto.rs`, `emit_xsd.rs`)
+
+Two independent, purely-syntactic renderers walk the same `EmitModel` tree:
+
+* `emit_proto` renders proto3 text — `message`/`enum` blocks, sequential
+  field numbers, `optional`/`repeated` labels from `EmitMult`.
+* `emit_xsd` renders XML Schema 1.0 — `xs:complexType`/`xs:simpleType`,
+  `minOccurs`/`maxOccurs` from `EmitMult`. Because XSD 1.0 has no nested
+  type definitions, nested `EmitDef`s are hoisted out to sibling top-level
+  types rather than nested inside their parent's `complexType`.
+
+Neither renderer re-parses anything or re-derives type information — every
+decision (scalar vs. message type, required/optional/repeated,
+import filenames) was already made while building the `EmitModel`, so
+adding a third target format would mean writing a third renderer over the
+existing model, not touching `lower.rs` at all.
+
+== Where the two front ends diverge
+
+The only behavioral difference between the CLI and the plugin is package
+name derivation, and it's forced by the interface, not a design choice: the
+CLI has a file path to fall back on (the input file's stem) when there's no
+`package` declaration; the plugin only has piped text, so it falls back to
+the literal string `"model"` instead, or accepts an explicit `--name`/`-n`
+override. See xref:../reference/cli.adoc[the CLI reference] and
+xref:../reference/plugin-commands.adoc[the plugin reference].

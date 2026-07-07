@@ -1,0 +1,36 @@
+= Why `sysml-v2-parser`, not `syster`
+
+The granule toolchain (`granule/00-meta-granule/shared-scripts/syster-*.nu`)
+previously validated `resources.sysml` files with `syster`
+(`syster-base`/`syster-cli`), an alpha-quality, independently authored
+SysML v2/KerML parser and semantic analyzer. In practice it produced false
+positives on files using only the `ISQ`/`SI` standard library:
+
+* `undefined reference: 'StorageCapacityValue'` even with
+  `private import ISQ::*;` in scope — its stdlib symbol resolution is
+  incomplete.
+* A parse error on `out item state : T;` — it mis-handled `state` as an
+  ordinary identifier in that grammar position.
+
+`sysml-v2-parser` is syntax-only: it never attempts import or stdlib
+resolution. Its `DiagnosticCategory::UnresolvedSymbol` exists only for
+*callers* to classify their own semantic findings — the parser itself never
+emits it. The trade-off this buys:
+
+* It *cannot* catch type errors, undefined references, or anything else
+  requiring semantic/stdlib knowledge.
+* It also *cannot* produce syster's class of false positive, because it
+  never attempts that analysis in the first place.
+
+For a linter whose job is "tell me if this file is syntactically valid
+SysML v2," that trade-off favors correctness over completeness: a linter
+that occasionally misses a real semantic error is much less costly than one
+that regularly cries wolf on valid files.
+
+This mirrors a migration already done elsewhere in the granule toolchain
+(`channel-adapter`'s `sysml-emit` crate, commit `9c68329c`, "switched to
+sysml-v2-parser") — `sysml-v2-cli`'s `emit` subcommand is in fact that same
+crate's AST-walking/lowering machinery, moved here because it's generic
+SysML v2 processing rather than specific to any one granule package. See
+xref:architecture.adoc[the architecture explanation] for how that lowering
+pipeline works.

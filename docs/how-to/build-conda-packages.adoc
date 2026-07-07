@@ -1,0 +1,64 @@
+= How to build the conda packages
+
+`recipe/recipe.yaml` is a single multi-output `rattler-build` recipe that
+builds both workspace members as separate conda packages — `sysml-v2-cli`
+and `nu_plugin_sysml_v2` — from one shared source tree, since the plugin
+has a path dependency on the CLI's library crate.
+
+== Render the recipe (no build, no network fetch of build deps)
+
+[source,bash]
+----
+pixi run render-pkg
+----
+
+Use this to validate the recipe's structure and variable substitution
+before committing to a full build.
+
+== Build both packages
+
+[source,bash]
+----
+pixi run build-pkg
+----
+
+Output packages land under `output/`. Add `-vv --keep-build` for verbose
+logs and to keep the intermediate build directory (useful when a build
+fails partway through):
+
+[source,bash]
+----
+pixi run build-pkg-debug
+----
+
+== Clean up
+
+[source,bash]
+----
+pixi run clean-pkg
+----
+
+Removes the `output/` directory entirely.
+
+== Without pixi
+
+The same tasks are plain `rattler-build` invocations, runnable directly
+from the repo root if you have `rattler-build` on `PATH`:
+
+[source,bash]
+----
+rattler-build build --recipe recipe/recipe.yaml --output-dir output
+----
+
+== Releasing a new version
+
+`recipe.yaml`'s `source.path: ..` points at the local workspace, so it
+always packages whatever is currently checked out — there's no tarball URL
+or `sha256` to update for local/CI builds from this repo.
+
+The one exception: if a *new tag* is ever cut from this repo for
+distribution outside it (e.g. a conda-forge feedstock that fetches a
+release tarball instead of building from a local checkout), that recipe
+would need its own `source.url`/`sha256` pointing at the tag, and the
+`cargo auditable install --path ./nu_plugin_sysml_v2` line would need to
+match wherever that tarball unpacks the crate to.

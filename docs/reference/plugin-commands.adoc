@@ -1,0 +1,86 @@
+= `nu_plugin_sysml_v2` command reference
+
+All four commands are in the `Formats` category and take their SysML v2
+source as piped `string` input (use `open --raw`, not `open` — see
+xref:../how-to/use-the-nushell-plugin.adoc[the how-to guide]).
+
+== `from sysml`
+
+Parse SysML v2 textual notation into structured data.
+
+[cols="1,3", options="header"]
+|===
+| Signature | Value
+
+| Input → Output
+| `string` → `any`
+
+| `--resilient` / `-r`
+| Return a partial AST alongside a list of syntax errors instead of
+  failing on the first error.
+|===
+
+Without `--resilient`: returns the parsed AST as a Nu record/table on
+success, or raises a labeled error (`SysML parse error`) on the first
+syntax error.
+
+With `--resilient`: always succeeds, returning
+`{root: <partial AST>, errors: [...]}`. Each error in `errors` has
+`message`, `line`, `column`, `expected`, `found`, `suggestion`
+(`null` where not applicable).
+
+== `lint sysml`
+
+Validate SysML v2 textual notation syntax.
+
+[cols="1,3", options="header"]
+|===
+| Signature | Value
+
+| Input → Output
+| `string` → `any`
+|===
+
+Returns `{ok: bool, errors: [...]}`. Each error has `message`, `line`,
+`column`, `severity`, `category`, `code`, `expected`, `found`, `suggestion`
+(`null` where not applicable). This is the plugin equivalent of
+`sysml-v2-cli lint`, sharing the same underlying implementation — output is
+identical modulo the record vs. text/JSON framing.
+
+== `to proto`
+
+Translate a SysML v2 message schema into protobuf (`.proto`) text.
+
+[cols="1,3", options="header"]
+|===
+| Signature | Value
+
+| Input → Output
+| `string` → `string`
+
+| `--name <string>` / `-n`
+| SysML package name to use for the proto `package` and derived imports.
+  Default: parsed from the source's first `package Name { ... }`
+  declaration, else the literal string `"model"`.
+|===
+
+Equivalent to `sysml-v2-cli emit`'s `.proto` output, minus the file-stem
+fallback (the plugin has no file path to fall back to).
+
+== `to xsd`
+
+Translate a SysML v2 message schema into an XML Schema (`.xsd`) document.
+
+[cols="1,3", options="header"]
+|===
+| Signature | Value
+
+| Input → Output
+| `string` → `string`
+
+| `--name <string>` / `-n`
+| Same as `to proto`'s `--name`: sets the XSD target namespace's source
+  package name.
+|===
+
+Equivalent to `sysml-v2-cli emit`'s `.xsd` output.

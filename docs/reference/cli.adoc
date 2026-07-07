@@ -1,0 +1,82 @@
+= `sysml-v2-cli` reference
+
+== `sysml-v2-cli lint <files>...`
+
+Validate SysML v2 file syntax.
+
+[cols="1,3", options="header"]
+|===
+| Argument/flag | Meaning
+
+| `<files>...`
+| One or more paths to lint. Required.
+
+| `--json`
+| Emit a JSON array instead of human-readable text.
+|===
+
+*Text output* (default): one line per file (`<path>: ok`, or one line per
+error as `<path>:<line>:<col>: <message>`), followed by a summary line
+(`✓ Analyzed N files: no errors` / `✗ Analyzed N files: M error(s)`).
+
+*JSON output* (`--json`): an array of objects, one per input file:
+
+[source,json]
+----
+{
+  "file": "resources.sysml",
+  "ok": false,
+  "errors": [
+    {
+      "message": "missing closing '}'",
+      "line": 3,
+      "column": 1,
+      "severity": null,
+      "category": "ParseError",
+      "code": "missing_closing_brace",
+      "expected": "'}'",
+      "found": null,
+      "suggestion": "Add '}' to close the open body."
+    }
+  ]
+}
+----
+
+*Exit code*: `0` if every file parsed with no errors, `1` otherwise.
+
+== `sysml-v2-cli emit <files>...`
+
+Generate `.proto` and `.xsd` files from SysML v2 message schemas.
+
+[cols="1,3", options="header"]
+|===
+| Argument/flag | Meaning
+
+| `<files>...`
+| One or more paths to translate. Required.
+
+| `--proto-dir <dir>`
+| Write `<stem>.proto` for each input into `<dir>`, instead of stdout.
+
+| `--xsd-dir <dir>`
+| Write `<stem>.xsd` for each input into `<dir>`, instead of stdout.
+
+| `--proto-out <file>`
+| Write the `.proto` output to this exact path. Intended for a single
+  input file — with multiple inputs, each overwrites the same path in turn.
+
+| `--xsd-out <file>`
+| Write the `.xsd` output to this exact path. Same single-input caveat as
+  `--proto-out`.
+|===
+
+`--proto-out`/`--xsd-out` take precedence over `--proto-dir`/`--xsd-dir`
+when both are given. With none of the four flags, both outputs print to
+stdout, each preceded by a `// ── <stem>.<ext> ──` marker line.
+
+Files written via `--*-dir`/`--*-out` are only rewritten when their content
+actually changed (byte-for-byte), so `emit` is safe to run repeatedly in a
+build script.
+
+The proto package / XSD namespace come from the first `package Name { ... }`
+declaration in the source; if there is none, the input file's stem is used.
