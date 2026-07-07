@@ -1,0 +1,89 @@
+schema_version: 1
+
+context:
+  version: "0.1.0"
+
+recipe:
+  name: sysml-v2-workspace
+  version: ${{ version }}
+
+# Shared by every output below — the whole Cargo workspace, not just one
+# member, because nu_plugin_sysml_v2 has a path dependency on the sibling
+# sysml-v2-cli/ crate. Path is relative to this recipe file.
+source:
+  path: ..
+
+build:
+  number: 0
+
+outputs:
+  - package:
+      name: sysml-v2-cli
+      version: ${{ version }}
+    build:
+      script:
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+          CARGO_PROFILE_RELEASE_LTO: fat
+        content:
+          - if: unix
+            then: |
+              cargo-bundle-licenses --format yaml --output ${SRC_DIR}/THIRDPARTY.yml
+              cargo auditable install --locked --no-track --path ./sysml-v2-cli --root ${PREFIX}
+            else: |
+              cargo-bundle-licenses --format yaml --output %SRC_DIR%\THIRDPARTY.yml
+              cargo auditable install --locked --no-track --path ./sysml-v2-cli --root %LIBRARY_PREFIX%
+    requirements:
+      build:
+        - ${{ compiler('rust') }}
+        - cargo-bundle-licenses
+        - cargo-auditable
+    tests:
+      - script:
+          - sysml-v2-cli --help
+    about:
+      homepage: https://github.com/babeloff/nu_plugin_sysml_v2
+      license: MIT
+      license_file: nu_plugin_sysml_v2/LICENSE
+      summary: SysML v2 syntax validator and message-schema emitter for the granule toolchain
+      description: |
+        Validates SysML v2 textual notation and generates .proto/.xsd files
+        from SysML v2 message schemas, built on the sysml-v2-parser crate.
+
+  - package:
+      name: nu_plugin_sysml_v2
+      version: ${{ version }}
+    build:
+      script:
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: symbols
+          CARGO_PROFILE_RELEASE_LTO: fat
+        content:
+          - if: unix
+            then: |
+              cargo-bundle-licenses --format yaml --output ${SRC_DIR}/THIRDPARTY.yml
+              cargo auditable install --locked --no-track --path ./nu_plugin_sysml_v2 --root ${PREFIX}
+            else: |
+              cargo-bundle-licenses --format yaml --output %SRC_DIR%\THIRDPARTY.yml
+              cargo auditable install --locked --no-track --path ./nu_plugin_sysml_v2 --root %LIBRARY_PREFIX%
+    requirements:
+      build:
+        - ${{ compiler('rust') }}
+        - cargo-bundle-licenses
+        - cargo-auditable
+    tests:
+      - script:
+          - nu_plugin_sysml_v2
+    about:
+      homepage: https://github.com/babeloff/nu_plugin_sysml_v2
+      license: MIT
+      license_file: nu_plugin_sysml_v2/LICENSE
+      summary: Parse SysML v2 textual notation into structured Nushell data
+      description: |
+        A Nushell plugin that parses SysML v2 textual notation (via sysml-v2-parser)
+        into structured Nu values, so models can be queried with `where`, `select`,
+        and the rest of Nushell's table/record pipeline.
+
+extra:
+  recipe-maintainers:
+    - phreed
