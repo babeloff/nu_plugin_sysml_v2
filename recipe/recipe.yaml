@@ -10,8 +10,18 @@ recipe:
 # Shared by every output below — the whole Cargo workspace, not just one
 # member, because nu_plugin_sysml_v2 has a path dependency on the sibling
 # sysml-v2-cli/ crate. Path is relative to this recipe file.
+#
+# `filter.exclude` is explicit (not just relying on .gitignore/use_gitignore)
+# because `output/` is this same recipe's own --output-dir: without
+# excluding it, the source copy recurses into its own destination directory
+# and fails with a filesystem permission error.
 source:
   path: ..
+  filter:
+    exclude:
+      - output/**
+      - target/**
+      - .git/**
 
 build:
   number: 0
