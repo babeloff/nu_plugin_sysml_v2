@@ -1,0 +1,197 @@
+= Fix Comment Block
+:toc: left
+:toclevels: 3
+
+It should be possible to use `/** ... */` comment blocks.
+
+Today one shape of comment is mis-parsed: the error-recovery parser stops
+treating a comment as a comment partway through it, and reads the rest of the
+comment body as code.
+This spec records what was measured, so a fix can be scoped and verified.
+
+== The defect
+
+A multi-line comment inside a *part definition body* is truncated by the
+error-recovery parser when one of its continuation lines looks like a typed
+feature declaration — that is, when the line reads `<identifier>: <text>`.
+The parser reports the comment's own prose as an invalid declaration:
+
+----
+bare feature `Optional : some text */` is not valid in a part definition body
+----
+
+The quoted text is the comment's second line, and — when the colon line is the
+last line of the comment — it includes the closing `*/`.
+That is the tell: the lexer has resumed scanning inside the comment body and no
+longer knows it is in a comment.
+
+== Reproduction
+
+`probe.sysml`:
+
+[source,sysml]
+----
+package P {
+    part def C {
+        /** first line
+            Optional: a profile may state the rate */
+        attribute x : String;
+    }
+}
+----
+
+[source,shell]
+----
+$ sysml-v2-cli lint --mode strict probe.sysml
+probe.sysml: ok
+✓ Analyzed 1 file: no errors
+
+$ sysml-v2-cli lint --mode edit probe.sysml
+probe.sysml:4:13: bare feature `Optional : a profile may state the rate */` is
+    not valid in a part definition body
+✗ Analyzed 1 file: 1 error(s)
+----
+
+Moving the colon to the comment's first line makes it pass in both modes.
+
+== Which parser is affected
+
+Only the error-recovery path.
+
+[cols="1,2,1"]
+|===
+| Entry point | Reached by | Verdict on the reproduction
+
+| `parse` (strict)
+| `lint` default, `lint --mode strict`, plugin `lint sysml`
+| accepts
+
+| `parse_for_editor` → `parse_with_diagnostics` (recovery)
+| `lint --mode edit`, plugin `lint sysml --mode edit`
+| rejects
+|===
+
+Measured against `sysml-v2-parser` 0.48.0.
+
+*This is a regression.* Under 0.29.0 — the version this crate pinned before the
+0.48.0 upgrade — the same file passed the recovery path, which was then the only
+path `lint` used.
+The defect therefore entered somewhere in 0.30.0–0.48.0.
+Because the strict parser is unaffected, it is a recovery-mode bug rather than a
+grammar bug.
+
+== Trigger conditions
+
+Every row below is a continuation line of a comment inside a `part def` body,
+checked in `--mode edit`.
+
+[cols="2,1,3"]
+|===
+| Continuation line | Result | Note
+
+| `Optional: some text`
+| rejected
+| The reported defect.
+
+| `Optional:some text`
+| rejected
+| The space after the colon is irrelevant.
+
+| `optional: some text`
+| rejected
+| Not case-sensitive.
+
+| `some phrase: more text`
+| accepts
+| Two words before the colon: no longer looks like `name : type`.
+
+| `Optional = some text`
+| accepts
+| Only the colon triggers it.
+
+| `Optional; some text`
+| accepts
+|
+
+| `Optional some text`
+| accepts
+|
+
+| `see ISQ::TimeValue for details`
+| accepts
+| A qualified name (`::`) does not trigger it.
+|===
+
+Position within the comment does not matter — the second and third lines behave
+alike — and a colon on the *first* line never triggers it.
+
+== Scope
+
+Affected regardless of comment syntax:
+
+* `/** ... */` (documentation comment)
+* `/* ... */` (plain block comment)
+* `doc /* ... */` (the `doc` keyword form)
+
+So this is not specific to documentation comments; the intent line at the top of
+this spec is the motivating case, not the boundary of the bug.
+
+Affected only inside a part definition body. These all accept the same comment:
+
+* a `package` body
+* an `action def` body
+* an `attribute def` body
+* a `port def` body
+* a `part` usage body
+
+== Impact
+
+Low for validation, because `lint` defaults to `--mode strict` and the strict
+parser is unaffected.
+
+It matters in two places:
+
+Editor and LSP tooling::
+  Anything built on the recovery path — which is what `parse_for_editor` exists
+  for — will show a spurious error *inside a comment*, at a column pointing into
+  prose. That is a confusing diagnostic to receive while typing, and it is the
+  case the recovery path is supposed to serve well.
+
+Prose in models::
+  Model authors have to avoid a natural English construction ("Optional: …",
+  "Note: …", "Example: …") on any line but the first of a comment in a part
+  definition body, without any way to know that from the model itself.
+
+== Workaround in place
+
+`campaign/00-meta-campaign/sysml/meta/compute-environment.sysml` hit this in the
+doc comment on `ComputeProfile.targetRunTime`.
+The original wording began a continuation line with `Optional:` and was reworded
+to `Optional, since …`.
+That rewording exists only to avoid this defect and should be reverted once it is
+fixed.
+
+== Acceptance criteria
+
+. Every row of <<Trigger conditions>> lints clean in *both* `--mode strict` and
+  `--mode edit`.
+. All three comment forms in <<Scope>> lint clean in both modes when a
+  continuation line reads `<identifier>: <text>`.
+. Regression tests in `sysml-v2-cli/tests/lint.rs` cover the reproduction for
+  each of the three comment forms, asserting both modes accept it — so a future
+  parser bump that reintroduces the defect fails the suite rather than silently
+  changing what models may say.
+. The `compute-environment.sysml` wording noted above is reverted to
+  `Optional: …` and still lints clean.
+
+== Where a fix belongs
+
+Upstream, in `sysml-v2-parser`'s recovery path: the comment-skipping state has to
+survive a newline while recovering, so body-element scanning does not resume
+inside a comment.
+Nothing in this crate can fix it — `lint` only chooses which entry point to call.
+
+Until it is fixed upstream, the mitigation already shipped here is that strict is
+the default, so the defect cannot fail a normal `lint` run.
+See also xref:02-parser-inconsistency.adoc[the parser-inconsistency spec] for the
+broader strict-versus-recovery divergence this is one instance of.

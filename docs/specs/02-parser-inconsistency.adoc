@@ -1,0 +1,193 @@
+= Parser Inconsistency
+:toc: left
+:toclevels: 3
+
+`sysml-v2-parser` exposes two entry points, and they disagree about what a valid
+SysML v2 file is.
+Neither is a superset of the other: each accepts things the other rejects.
+
+This spec records the measured divergence, why `lint` exposes it as a `--mode`
+flag rather than picking one silently, and what a fix would have to achieve.
+
+Measured against `sysml-v2-parser` 0.48.0.
+
+== The two entry points
+
+[cols="1,2,2"]
+|===
+| | `parse` | `parse_for_editor`
+
+| Underlying
+| `parse_root`
+| `parse_with_diagnostics`
+
+| Returns
+| `Result<RootNamespace, ParseError>` — one error
+| `ParseResult { root, errors }` — a partial AST plus every error
+
+| Intended for
+| Deciding whether a document is valid
+| IDE and LSP features on half-written source
+
+| Reached by
+| `lint` default, `lint --mode strict`, plugin `lint sysml`
+| `lint --mode edit`, plugin `lint sysml --mode edit`
+|===
+
+== The divergence runs both ways
+
+=== Recovery rejects valid SysML
+
+Constructs the grammar accepts and the recovery path does not implement.
+These are *false positives*: correct models reported as broken.
+
+[cols="2,1,1"]
+|===
+| Construct | `strict` | `edit`
+
+| `allocate action step to image;` in a part-definition body
+| accepts
+| rejects
+
+| `part p : A;` in an action-definition body
+| accepts
+| rejects
+
+| `foreach cfg in items { … }` in an action body
+| accepts
+| rejects
+
+| `snapshot t_done { }` in an action body
+| accepts
+| rejects
+
+| A comment whose continuation line reads `Word: text`, inside a
+  part-definition body
+| accepts
+| rejects
+|===
+
+The last row is xref:01-fix-comment-doc.adoc[its own spec] — the recovery path
+resumes scanning inside a comment body.
+
+For calibration, these are handled identically by both: a one-line `package`,
+`individual` with a body, `require constraint { … }`, `flow a.o to b.i;`, and
+`calc def` with a `return` expression.
+
+=== Strict silently accepts invalid SysML
+
+The strict parser returns `Ok` for input it cannot parse, dropping what it does
+not understand instead of reporting it.
+These are *false negatives*: real mistakes that pass.
+
+[cols="2,1,1"]
+|===
+| Malformed input | `strict` | `edit`
+
+| `attribute x : String` — missing semicolon
+| *misses*
+| catches
+
+| `attribut def X { }` — misspelled keyword
+| *misses*
+| catches
+
+| `attribute x String;` — missing colon
+| *misses*
+| catches
+
+| `attribute x : String = "oops;` — unterminated string literal
+| *misses*
+| catches
+
+| `frobnicate def Q { }` — unknown keyword
+| *misses*
+| catches
+
+| A stray extra `}`
+| catches
+| catches
+
+| A missing closing `}`
+| catches
+| catches
+|===
+
+Confirmed at the library level, not just through the CLI: for `parts def A { }`,
+`parse` returns `Ok` with a `RootNamespace` of one element — the package — and the
+malformed declaration simply absent.
+Structural brace errors are the class strict does catch, because they break the
+document's shape rather than one declaration's syntax.
+
+Neither mode catches everything: `%%% garbage %%%` inside a part-definition body
+is accepted by both.
+
+== Effect on this workspace's models
+
+All sixteen models in the surrounding campaign repositories pass `strict`.
+Four fail `edit`, entirely on the constructs in <<Recovery rejects valid SysML>>:
+
+[cols="2,1,1"]
+|===
+| Model | `strict` | `edit` errors
+
+| `experiment-workflow.sysml` | ok | 7
+| `carla-system-experiment.sysml` | ok | 10
+| `benchmark-surrogate-experiment.sysml` | ok | 6
+| `carla-system-campaign.sysml` | ok | 2
+| `benchmark-surrogate-campaign.sysml` | ok | 2
+| the other eleven | ok | 0
+|===
+
+This is why the divergence matters in practice rather than in theory: before the
+mode flag existed, `lint` used the recovery path, and the five models carrying the
+campaign design could not be validated at all.
+Their failures were read as model defects for some time; they were not.
+
+== Why `lint` exposes a flag rather than choosing
+
+Both answers are useful, and neither is trustworthy alone.
+
+`strict` is the default::
+  It answers the question a validator is asked — does the grammar accept this
+  file — and it does not reject correct models.
+  Its blind spot is that a typo can pass, so a clean `lint` run is weaker
+  evidence than it looks.
+
+`edit` is available::
+  It reports every problem in a file rather than the first, which is what makes
+  diagnostics usable, and it catches the ordinary typos strict drops.
+  Its cost is false positives on valid constructs, which makes it unusable as a
+  gate today.
+
+Running both and reading the union is currently the most thorough check
+available: `strict` for the verdict, `edit` for a list of suspicious lines to
+inspect by hand, discounting the known false-positive constructs above.
+
+== Acceptance criteria for a fix
+
+A fix lives upstream in `sysml-v2-parser`; nothing in this crate can reconcile the
+two paths, since `lint` only chooses which to call.
+
+. Every construct in <<Recovery rejects valid SysML>> is accepted by *both* entry
+  points.
+. Every malformed input in <<Strict silently accepts invalid SysML>> is rejected
+  by *both* entry points.
+. The two entry points agree on the verdict for every file; they may still differ
+  in how many diagnostics they report, which is the legitimate difference between
+  them.
+. `%%% garbage %%%` in a part-definition body is rejected by both.
+
+Once 1 and 2 hold, `--mode` becomes a choice about diagnostic verbosity rather
+than about which answer to believe, and this crate's regression tests
+(`sysml-v2-cli/tests/lint.rs::strict_and_edit_modes_disagree_about_allocate`)
+should be inverted to assert agreement.
+
+== Provenance
+
+The divergence surfaced during the 0.29.0 → 0.48.0 parser upgrade.
+Under 0.29.0 `lint` used the recovery path exclusively, so the false positives
+were the visible behaviour and the false negatives were unknown.
+Switching the verdict to `parse` made the models pass and exposed the opposite
+failure mode.
+Both directions were then measured deliberately, which produced the tables above.
