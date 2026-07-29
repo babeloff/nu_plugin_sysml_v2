@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use sysml_v2_parser::{parse_for_editor, ParseError};
+use sysml_v2_parser::{parse, parse_for_editor, ParseError};
 
 // `sysml_v2_parser::ParseError` does not itself derive `Serialize` (only the
 // `DiagnosticSeverity`/`DiagnosticCategory` enums nested inside it do), so we
@@ -46,16 +46,67 @@ struct FileReport {
     errors: Vec<ErrorReport>,
 }
 
-/// Lint a single in-memory SysML v2 source string.
+/// Which parser entry point decides whether a file is valid.
+///
+/// The two disagree, and each is right for a different job. The recovery path
+/// behind [`parse_for_editor`] does not implement every production the strict
+/// parser does, so it reports valid SysML as errors — `allocate` in a
+/// part-definition body, `part` in an action-definition body, and `foreach` in
+/// an action body all parse strictly but are rejected by recovery. What recovery
+/// gives in exchange is a diagnostic per problem on half-written source, which
+/// is what an editor needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LintMode {
+    /// Verdict from the strict parser: a file is valid if the grammar accepts
+    /// it. The default, and the right choice for validating a finished model or
+    /// gating CI.
+    #[default]
+    Strict,
+    /// Verdict from the error-recovery parser, as an editor or LSP would see it:
+    /// every recoverable problem is reported, and constructs recovery does not
+    /// cover are reported too. Useful while writing a file, or to see what
+    /// tooling built on the recovery path will complain about.
+    Edit,
+}
+
+/// Lint a single in-memory SysML v2 source string in [`LintMode::Strict`].
 ///
 /// Returns `(ok, errors)` — `ok` is `true` when the source parses without
 /// syntax errors. This is the reusable core behind both the CLI's per-file
 /// loop and the `nu_plugin_sysml_v2` `lint sysml` plugin command.
 pub fn lint_source(source: &str) -> (bool, Vec<ErrorReport>) {
-    let result = parse_for_editor(source);
-    let ok = result.is_ok();
-    let errors = result.errors.iter().map(ErrorReport::from).collect();
-    (ok, errors)
+    lint_source_mode(source, LintMode::Strict)
+}
+
+/// Lint a single in-memory SysML v2 source string in an explicit mode.
+///
+/// In `Strict`, the recovery path is still consulted — but only once the strict
+/// parse has already failed, because it enumerates every error in the file
+/// instead of just the first, which is what makes the diagnostics useful.
+pub fn lint_source_mode(source: &str, mode: LintMode) -> (bool, Vec<ErrorReport>) {
+    match mode {
+        LintMode::Edit => {
+            let result = parse_for_editor(source);
+            let ok = result.is_ok();
+            let errors = result.errors.iter().map(ErrorReport::from).collect();
+            (ok, errors)
+        }
+        LintMode::Strict => match parse(source) {
+            Ok(_) => (true, Vec::new()),
+            Err(first) => {
+                let recovered = parse_for_editor(source);
+                let mut errors: Vec<ErrorReport> =
+                    recovered.errors.iter().map(ErrorReport::from).collect();
+                // Recovery can disagree about *where* the failure is and, in
+                // principle, find nothing at all; never report a failure with no
+                // explanation attached.
+                if errors.is_empty() {
+                    errors.push(ErrorReport::from(&first));
+                }
+                (false, errors)
+            }
+        },
+    }
 }
 
 /// Like [`lint_source`], but also resolves `source`'s `import` statements
@@ -66,7 +117,17 @@ pub fn lint_source_with_imports(
     source: &str,
     index: &crate::resolve::LibraryIndex,
 ) -> (bool, Vec<ErrorReport>) {
-    let (mut ok, mut errors) = lint_source(source);
+    lint_source_with_imports_mode(source, index, LintMode::Strict)
+}
+
+/// Like [`lint_source_with_imports`], with an explicit [`LintMode`] for the
+/// syntax half of the check. Import resolution is unaffected by the mode.
+pub fn lint_source_with_imports_mode(
+    source: &str,
+    index: &crate::resolve::LibraryIndex,
+    mode: LintMode,
+) -> (bool, Vec<ErrorReport>) {
+    let (mut ok, mut errors) = lint_source_mode(source, mode);
     let resolved = crate::resolve::resolve_imports(source, index);
 
     for u in &resolved.unresolved_imports {
@@ -102,30 +163,36 @@ pub fn lint_source_with_imports(
     (ok, errors)
 }
 
-pub fn run(files: Vec<PathBuf>, json: bool) -> Result<ExitCode> {
-    run_impl(files, json, None)
+pub fn run(files: Vec<PathBuf>, json: bool, mode: LintMode) -> Result<ExitCode> {
+    run_impl(files, json, None, mode)
 }
 
 /// Like [`run`], but resolves each file's `import` statements against a
 /// [`crate::resolve::LibraryIndex`] built from `lib_dirs`.
-pub fn run_with_imports(files: Vec<PathBuf>, json: bool, lib_dirs: &[PathBuf]) -> Result<ExitCode> {
+pub fn run_with_imports(
+    files: Vec<PathBuf>,
+    json: bool,
+    lib_dirs: &[PathBuf],
+    mode: LintMode,
+) -> Result<ExitCode> {
     let index = crate::resolve::LibraryIndex::build(lib_dirs)
         .context("failed to scan --lib-dir directories")?;
-    run_impl(files, json, Some(&index))
+    run_impl(files, json, Some(&index), mode)
 }
 
 fn run_impl(
     files: Vec<PathBuf>,
     json: bool,
     index: Option<&crate::resolve::LibraryIndex>,
+    mode: LintMode,
 ) -> Result<ExitCode> {
     let mut reports = Vec::with_capacity(files.len());
     for file in &files {
         let source = std::fs::read_to_string(file)
             .with_context(|| format!("failed to read {}", file.display()))?;
         let (ok, errors) = match index {
-            Some(index) => lint_source_with_imports(&source, index),
-            None => lint_source(&source),
+            Some(index) => lint_source_with_imports_mode(&source, index, mode),
+            None => lint_source_mode(&source, mode),
         };
         reports.push(FileReport {
             file: file.clone(),

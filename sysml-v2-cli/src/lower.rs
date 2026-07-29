@@ -16,8 +16,8 @@
 use std::path::PathBuf;
 
 use sysml_v2_parser::ast::{
-    AttributeBody, AttributeBodyElement, EnumerationBody, Identification, Import, Node,
-    PackageBody, PartDefBody,
+    AttributeBody, AttributeBodyElement, EnumerationBody, Expression, Identification, Import, Node,
+    PackageBody, PartDefBody, TypingRelationship,
 };
 use sysml_v2_parser::{parse_for_editor, PackageBodyElement, PartDefBodyElement, RootElement};
 
@@ -165,9 +165,7 @@ fn collect_pkg_symbols(
                     continue;
                 }
                 let qname = qualify(parent_qname, &name);
-                let relationships = node
-                    .typing
-                    .clone()
+                let relationships = typing_target(&node.typing)
                     .map(|target| {
                         vec![HirRelationship {
                             kind: RelationshipKind::TypedBy,
@@ -221,7 +219,7 @@ fn collect_partdef_body_symbols(
                     continue;
                 }
                 let qname = qualify(parent_qname, &name);
-                let typed_by = node.typing.clone().unwrap_or_default();
+                let typed_by = typing_target(&node.typing).unwrap_or_default();
                 out.push(HirSymbol {
                     name,
                     qualified_name: qname,
@@ -242,7 +240,7 @@ fn collect_partdef_body_symbols(
                 }
                 let qname = qualify(parent_qname, &name);
                 let typed_by = node.type_name.clone().unwrap_or_default();
-                let mult = node.multiplicity.as_deref().map(parse_multiplicity);
+                let mult = node.multiplicity.as_deref().map(multiplicity_from_ast);
                 out.push(HirSymbol {
                     name,
                     qualified_name: qname,
@@ -294,7 +292,7 @@ fn collect_attr_body_symbols(
                     continue;
                 }
                 let qname = qualify(parent_qname, &name);
-                let typed_by = node.typing.clone().unwrap_or_default();
+                let typed_by = typing_target(&node.typing).unwrap_or_default();
                 out.push(HirSymbol {
                     name,
                     qualified_name: qname,
@@ -317,9 +315,7 @@ fn collect_attr_body_symbols(
                     continue;
                 }
                 let qname = qualify(parent_qname, &name);
-                let relationships = node
-                    .typing
-                    .clone()
+                let relationships = typing_target(&node.typing)
                     .map(|target| {
                         vec![HirRelationship {
                             kind: RelationshipKind::TypedBy,
@@ -356,7 +352,7 @@ fn collect_enum_variants(
 ) {
     if let EnumerationBody::Brace { values } = body {
         for raw in values {
-            let name = raw.trim_matches('\'').to_owned();
+            let name = raw.name.trim_matches('\'').to_owned();
             if name.is_empty() {
                 continue;
             }
@@ -469,20 +465,38 @@ fn import_target(node: &Node<Import>) -> ImportTarget {
 // Multiplicity parsing
 // ---------------------------------------------------------------------------
 
-/// Parse a SysML multiplicity string like `"[0..*]"`, `"[1]"`, `"[0..1]"`.
-fn parse_multiplicity(raw: &str) -> Multiplicity {
-    let inner = raw
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .trim();
-    if let Some((lo_s, hi_s)) = inner.split_once("..") {
-        let lower = lo_s.trim().parse().ok();
-        let upper = hi_s.trim().parse().ok(); // "*" parses as None → unbounded
-        Multiplicity { lower, upper }
-    } else {
-        let n: Option<u32> = inner.trim().parse().ok();
-        Multiplicity { lower: n, upper: n }
+/// The type name a typing relationship points at, e.g. `ISQ::MassValue`.
+///
+/// Since parser 0.48 `typing` is a structured `TypingRelationship` carrying a
+/// list of targets rather than a bare string; `target_display` renders the list
+/// the way the source wrote it.
+fn typing_target(typing: &Option<Node<TypingRelationship>>) -> Option<String> {
+    typing.as_ref().map(|t| t.target_display())
+}
+
+/// A multiplicity bound, when it is a plain integer literal.
+///
+/// Bounds are expressions in the AST, so `[0..n]` or `[1..count]` are possible;
+/// anything that is not an integer literal is reported as unbounded, which is how
+/// the HIR already represents `*`.
+fn expr_as_u32(e: &Expression) -> Option<u32> {
+    match e {
+        Expression::LiteralInteger(n) => u32::try_from(*n).ok(),
+        _ => None,
+    }
+}
+
+/// Lower a parser multiplicity into the HIR's numeric pair.
+///
+/// Replaces the string parser this used before 0.48, when `multiplicity` was the
+/// raw `"[0..*]"` text: an unbounded upper bound is `None` in both models, so the
+/// HIR shape is unchanged.
+fn multiplicity_from_ast(m: &sysml_v2_parser::ast::Multiplicity) -> Multiplicity {
+    Multiplicity {
+        // Closures, not `expr_as_u32` directly: the bounds are `Node<Expression>`
+        // and deref coercion to `&Expression` needs a call site to happen at.
+        lower: m.lower.as_deref().and_then(|n| expr_as_u32(n)),
+        upper: m.upper.as_deref().and_then(|n| expr_as_u32(n)),
     }
 }
 

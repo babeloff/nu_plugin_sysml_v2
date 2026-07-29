@@ -5,7 +5,7 @@ use nu_protocol::{record, Category, LabeledError, Signature, Span, SyntaxShape, 
 use sysml_v2_cli::{
     emit_proto::emit_proto,
     emit_xsd::emit_xsd,
-    lint::{lint_source, lint_source_with_imports},
+    lint::{lint_source_mode, lint_source_with_imports_mode, LintMode},
     lower::{lower_file_with_resolver, parse_package_name, PackageResolver},
     resolve::LibraryIndex,
 };
@@ -148,6 +148,12 @@ impl PluginCommand for LintSysml {
         resolve_imports_signature(
             Signature::build(PluginCommand::name(self))
                 .input_output_type(Type::String, Type::Any)
+                .named(
+                    "mode",
+                    SyntaxShape::String,
+                    "Which parser decides validity: 'strict' (default, the grammar)                      or 'edit' (the error-recovery parser, as an editor sees it)",
+                    Some('m'),
+                )
                 .category(Category::Formats),
         )
     }
@@ -166,10 +172,19 @@ impl PluginCommand for LintSysml {
             LabeledError::new("Expected string input").with_label(err.to_string(), span)
         })?;
 
+        let mode = match call.get_flag::<String>("mode")?.as_deref() {
+            None | Some("strict") => LintMode::Strict,
+            Some("edit") => LintMode::Edit,
+            Some(other) => {
+                return Err(LabeledError::new("Unknown lint mode")
+                    .with_label(format!("expected 'strict' or 'edit', got '{other}'"), span));
+            }
+        };
+
         let index = resolve_index(call, span)?;
         let (ok, errors) = match &index {
-            Some(index) => lint_source_with_imports(source, index),
-            None => lint_source(source),
+            Some(index) => lint_source_with_imports_mode(source, index, mode),
+            None => lint_source_mode(source, mode),
         };
         let errors: Vec<Value> = errors
             .iter()

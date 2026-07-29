@@ -60,13 +60,13 @@ fn flags_a_missing_closing_brace() {
 }
 
 #[test]
-fn same_line_inline_redefinition_body_is_a_known_parser_limitation() {
-    // sysml-v2-parser 0.29.0 mis-tracks brace nesting when a usage's inline
-    // redefinition body has its closing '}' on the same line as the last
-    // statement inside it. Splitting the closing brace onto its own line
-    // works around it. This test documents the limitation so an upstream
-    // fix (or a version bump) is visible as a test failure here, not a
-    // silent behavior change.
+fn same_line_inline_redefinition_body_parses() {
+    // Was a known limitation: sysml-v2-parser 0.29.0 mis-tracked brace nesting
+    // when a usage's inline redefinition body closed its '}' on the same line as
+    // the last statement inside it, so models had to split the closing brace onto
+    // its own line. Fixed as of the 0.48.0 upgrade — this test now guards the fix
+    // rather than documenting the bug, and the multi-line form below must keep
+    // working too.
     let (ok_inline, _) = run(r#"
         package Foo {
             port def P { attribute address : String; }
@@ -76,8 +76,8 @@ fn same_line_inline_redefinition_body_is_a_known_parser_limitation() {
         }
         "#);
     assert!(
-        !ok_inline,
-        "if this now passes, the upstream bug is fixed — simplify resources.sysml formatting"
+        ok_inline,
+        "same-line inline redefinition body should parse since 0.48.0"
     );
 
     let (ok_multiline, _) = run(r#"
@@ -91,4 +91,52 @@ fn same_line_inline_redefinition_body_is_a_known_parser_limitation() {
         }
         "#);
     assert!(ok_multiline);
+}
+
+#[test]
+fn strict_and_edit_modes_disagree_about_allocate() {
+    // `allocate` in a part-definition body is valid SysML v2 and the strict
+    // parser accepts it; the error-recovery parser does not implement that
+    // production and reports it. The mode flag exists because both answers are
+    // useful: strict for validating a model, edit for seeing what
+    // recovery-based tooling (an LSP) will say.
+    let src = r#"
+        package Foo {
+            part def A { attribute x : String; }
+            part def B {
+                ref part image : A;
+                action step;
+                allocate action step to image;
+            }
+        }
+        "#;
+
+    let (ok_strict, errors_strict) = sysml_v2_cli::lint::lint_source_mode(
+        src,
+        sysml_v2_cli::lint::LintMode::Strict,
+    );
+    assert!(ok_strict, "strict parser should accept `allocate`");
+    assert!(errors_strict.is_empty());
+
+    let (ok_edit, errors_edit) =
+        sysml_v2_cli::lint::lint_source_mode(src, sysml_v2_cli::lint::LintMode::Edit);
+    assert!(!ok_edit, "recovery parser does not cover `allocate` yet");
+    assert!(!errors_edit.is_empty());
+
+    // Default is strict.
+    let (ok_default, _) = sysml_v2_cli::lint::lint_source(src);
+    assert_eq!(ok_default, ok_strict);
+}
+
+#[test]
+fn both_modes_reject_a_real_syntax_error() {
+    let src = "package Foo {\n    attribute def X { attribute a : String;\n";
+    for mode in [
+        sysml_v2_cli::lint::LintMode::Strict,
+        sysml_v2_cli::lint::LintMode::Edit,
+    ] {
+        let (ok, errors) = sysml_v2_cli::lint::lint_source_mode(src, mode);
+        assert!(!ok, "{mode:?} should reject a missing closing brace");
+        assert!(!errors.is_empty(), "{mode:?} should explain the failure");
+    }
 }

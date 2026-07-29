@@ -55,7 +55,11 @@ cmd = "rm -rf vendor"
 description = "Remove the downloaded/expanded sysml.library.kpar files"
 
 [dependencies]
-rust = ">=1.80"
-rattler-build = ">=0.68.0,<0.69"
+# 1.82 because nu_plugin_sysml_v2 declares rust-version = "1.82"; a lower
+# toolchain satisfies this constraint and then fails to build.
+rust = ">=1.82"
+# Floor plus a major ceiling, matching how this workspace pins other 0.x tools.
+# The previous <0.69 ceiling was accidental and held the build back four minors.
+rattler-build = ">=0.72.0,<1"
 curl = "*"
 unzip = "*"

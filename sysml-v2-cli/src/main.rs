@@ -2,20 +2,22 @@
 //! `sysml-v2-parser`.
 //!
 //! `lint` replaces the `syster` binary (syster-base/syster-cli), which
-//! produced false "undefined reference" errors on valid files — it attempts
-//! stdlib symbol resolution and its `ISQ`/`SI` model is incomplete — and
-//! mis-parsed some identifiers that collide with grammar keywords in certain
-//! positions. `sysml-v2-parser` is syntax-only: it never attempts import or
-//! stdlib resolution (see its `DiagnosticCategory::UnresolvedSymbol`, which
-//! the parser itself never emits — it exists only for callers to classify
-//! their own semantic findings). That means `lint` cannot catch type errors,
-//! but it also cannot produce that class of false positive.
+//! seemed less mature overall — among other things, it produced an
+//! "undefined reference" error on valid files even with the referenced
+//! package imported, and mis-parsed some identifiers that collide with
+//! grammar keywords in certain positions. `sysml-v2-parser` is syntax-only:
+//! it never attempts import or stdlib resolution (see its
+//! `DiagnosticCategory::UnresolvedSymbol`, which the parser itself never
+//! emits — it exists only for callers to classify their own semantic
+//! findings). That means `lint` cannot catch type errors, but it also
+//! structurally cannot produce that specific "undefined reference despite
+//! being imported" symptom.
 //!
 //! `--resolve-imports`/`--lib-dir` opts into an additional, separate check
 //! (see `sysml_v2_cli::resolve`): resolving `import` statements against a
 //! namespace-to-file library index (e.g. an ISQ/SI checkout) and flagging
 //! unresolved imports/references. It's off by default so plain `lint`/`emit`
-//! can never regress into the class of false positive `syster` produced.
+//! never changes behavior unless you explicitly ask for the stricter check.
 //!
 //! `emit` was moved here from `channel-adapter/crate/sysml-emit`: reads
 //! SysML v2 message schemas and generates `.proto`/`.xsd` files. The
@@ -27,8 +29,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand};
-use sysml_v2_cli::lint;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use sysml_v2_cli::lint::{self, LintMode};
 
 #[derive(Parser)]
 #[command(
@@ -58,6 +60,13 @@ struct LintArgs {
     #[arg(long)]
     json: bool,
 
+    /// Which parser decides validity. `strict` (default) asks the grammar
+    /// whether the file is valid; `edit` asks the error-recovery parser, as an
+    /// editor or LSP would, which reports more — including constructs recovery
+    /// does not cover, such as `allocate` in a part-definition body.
+    #[arg(long, value_enum, default_value_t = Mode::Strict)]
+    mode: Mode,
+
     /// Resolve `import` statements against --lib-dir and flag unresolved
     /// imports/references (see sysml_v2_cli::resolve). Off by default.
     #[arg(long)]
@@ -67,6 +76,23 @@ struct LintArgs {
     /// used with --resolve-imports.
     #[arg(long = "lib-dir")]
     lib_dirs: Vec<PathBuf>,
+}
+
+/// CLI surface for [`LintMode`]; kept separate so the library type carries no
+/// clap dependency.
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum Mode {
+    Strict,
+    Edit,
+}
+
+impl From<Mode> for LintMode {
+    fn from(m: Mode) -> Self {
+        match m {
+            Mode::Strict => LintMode::Strict,
+            Mode::Edit => LintMode::Edit,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -106,10 +132,11 @@ fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
         Command::Lint(args) => {
+            let mode = args.mode.into();
             if args.resolve_imports {
-                lint::run_with_imports(args.files, args.json, &args.lib_dirs)
+                lint::run_with_imports(args.files, args.json, &args.lib_dirs, mode)
             } else {
-                lint::run(args.files, args.json)
+                lint::run(args.files, args.json, mode)
             }
         }
         Command::Emit(args) => {

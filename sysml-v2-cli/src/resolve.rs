@@ -4,8 +4,7 @@
 //!
 //! Opt-in only (the CLI's `--resolve-imports`/`--lib-dir` flags, the
 //! plugin's equivalent) — the default `lint`/`emit` behavior stays
-//! syntax-only, so this can never regress into the kind of false
-//! "undefined reference" error that got `syster` replaced (see
+//! syntax-only and never changes unless this is explicitly requested (see
 //! `docs/explanation/why-sysml-v2-parser.adoc`).
 //!
 //! Scope: indexing and resolution only cover `package`, `library package`,
