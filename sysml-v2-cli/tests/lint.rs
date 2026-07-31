@@ -94,38 +94,277 @@ fn same_line_inline_redefinition_body_parses() {
 }
 
 #[test]
-fn strict_and_edit_modes_disagree_about_allocate() {
-    // `allocate` in a part-definition body is valid SysML v2 and the strict
-    // parser accepts it; the error-recovery parser does not implement that
-    // production and reports it. The mode flag exists because both answers are
-    // useful: strict for validating a model, edit for seeing what
-    // recovery-based tooling (an LSP) will say.
-    let src = r#"
-        package Foo {
-            part def A { attribute x : String; }
-            part def B {
-                ref part image : A;
-                action step;
-                allocate action step to image;
+fn view_rendering_bodies_carry_nested_members() {
+    // Fixed in sysml-v2-parser 0.49.0: `render`/`rendering` usage bodies were
+    // opaque, so an anonymous column redefinition nested inside one was parsed
+    // as unrecoverable text, and `view :>> name[n] { … }` was not accepted at
+    // all. Both forms come from the OMG Systems Library's `asElementTable` /
+    // `columnView` mechanism. Both entry points accept them, so one assertion
+    // per mode.
+    for src in [
+        r#"
+        package P {
+            view def V {
+                rendering asTextualNotationTable :> asElementTable {
+                    view :>> columnView[1] {
+                        render asTextualNotation;
+                    }
+                }
             }
         }
-        "#;
+        "#,
+        r#"
+        package P {
+            view v {
+                render asElementTable {
+                    view :>> columnView[1] {
+                        render asTextualNotation;
+                    }
+                }
+            }
+        }
+        "#,
+    ] {
+        for mode in [
+            sysml_v2_cli::lint::LintMode::Strict,
+            sysml_v2_cli::lint::LintMode::Edit,
+        ] {
+            let (ok, errors) = sysml_v2_cli::lint::lint_source_mode(src, mode);
+            assert!(
+                ok,
+                "{mode:?} should accept a nested column-view redefinition since \
+                 0.49.0, got {errors:?}",
+                errors = errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            );
+        }
+    }
+}
 
-    let (ok_strict, errors_strict) = sysml_v2_cli::lint::lint_source_mode(
-        src,
+#[test]
+fn comment_prose_is_not_read_as_a_declaration() {
+    // Fixed in sysml-v2-parser 0.50.0 (upstream issue #1, commits ee9b8a9 +
+    // f64335d): the recovery parser used to stop treating a comment as a comment
+    // when a continuation line read `<identifier>: <text>`, but only inside a
+    // *part definition* body, and report the prose as a feature declaration.
+    //
+    // This is criterion 3 of the now-retired docs/specs/01-fix-comment-block.adoc:
+    // both modes must accept the reproduction, for all three comment forms, so a
+    // future parser bump that reintroduces the defect fails here rather than
+    // silently changing what models may say.
+    for open in ["/**", "/*", "doc /*"] {
+        let src = format!(
+            "package P {{\n\
+             \x20   part def C {{\n\
+             \x20       {open} first line\n\
+             \x20           Optional: a profile may state the rate */\n\
+             \x20       attribute x : String;\n\
+             \x20   }}\n\
+             }}\n"
+        );
+
+        for mode in [
+            sysml_v2_cli::lint::LintMode::Strict,
+            sysml_v2_cli::lint::LintMode::Edit,
+        ] {
+            let (ok, errors) = sysml_v2_cli::lint::lint_source_mode(&src, mode);
+            assert!(
+                ok,
+                "{mode:?} should accept a `{open} … Optional: … */` comment, got {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+#[test]
+fn both_modes_reject_malformed_declarations() {
+    // Criterion 2 of docs/specs/02-parser-inconsistency.adoc, met in 0.50.0.
+    //
+    // Through 0.49.0 the strict parser returned `Ok` for a body declaration it
+    // could not parse, dropping it instead of reporting it — so a typo passed
+    // `lint`, and a clean run was weaker evidence than it looked. 0.50.0's
+    // verdict-parity work makes strict report what it used to drop.
+    //
+    // That change is also what surfaced the newly-failing models recorded in
+    // docs/specs/03-verdict-parity-fallout.adoc: the same masking hid real
+    // grammar gaps, not just these typos.
+    for (label, src) in [
+        (
+            "missing semicolon",
+            "package P { part def A { attribute x : String } }",
+        ),
+        ("misspelled keyword", "package P { attribut def X { } }"),
+        (
+            "missing colon",
+            "package P { part def A { attribute x String; } }",
+        ),
+        (
+            "unterminated string",
+            "package P { part def A { attribute x : String = \"oops; } }",
+        ),
+        ("unknown keyword", "package P { frobnicate def Q { } }"),
+        ("pluralized keyword", "package P { parts def A { } }"),
+    ] {
+        for mode in [
+            sysml_v2_cli::lint::LintMode::Strict,
+            sysml_v2_cli::lint::LintMode::Edit,
+        ] {
+            let (ok, errors) = sysml_v2_cli::lint::lint_source_mode(src, mode);
+            assert!(!ok, "{mode:?} should reject {label}");
+            assert!(!errors.is_empty(), "{mode:?} should explain {label}");
+        }
+    }
+
+    // Criterion 4 is still unmet: neither mode rejects this. Recorded so the gap
+    // is not mistaken for coverage.
+    let garbage = "package P { part def A { %%% garbage %%% } }";
+    for mode in [
         sysml_v2_cli::lint::LintMode::Strict,
-    );
-    assert!(ok_strict, "strict parser should accept `allocate`");
-    assert!(errors_strict.is_empty());
+        sysml_v2_cli::lint::LintMode::Edit,
+    ] {
+        let (ok, _) = sysml_v2_cli::lint::lint_source_mode(garbage, mode);
+        assert!(ok, "{mode:?} is still expected to miss `%%% garbage %%%`");
+    }
+}
 
-    let (ok_edit, errors_edit) =
-        sysml_v2_cli::lint::lint_source_mode(src, sysml_v2_cli::lint::LintMode::Edit);
-    assert!(!ok_edit, "recovery parser does not cover `allocate` yet");
-    assert!(!errors_edit.is_empty());
+#[test]
+fn both_modes_reject_uncovered_grammar() {
+    // Constructs that are legal SysML v2 but that sysml-v2-parser 0.50.0 does not
+    // implement. Both entry points reject them, consistently — these are grammar
+    // gaps, not a mode disagreement.
+    //
+    // Every case below is corroborated by OMG-authored SysML v2 (the domain and
+    // systems libraries, the PTC 2025 SimpleVehicleModel, or the training
+    // examples) *in the same body kind*, and each is paired with an accepted
+    // control in docs/specs/03-verdict-parity-fallout.adoc. That corroboration
+    // matters: five earlier entries in this list turned out to be defects in our
+    // own models rather than parser gaps, and were withdrawn.
+    //
+    // Do not "fix" a model to satisfy this test. When a release closes one of
+    // these, this test fails — that is the signal to update spec 03.
+    for (label, src) in [
+        (
+            // OMG: Parts.sysml:51, 3e-Function-based Behavior-item.sysml:28
+            "part usage in an action-definition body",
+            r#"
+            package Foo {
+                part def A { attribute x : String; }
+                action def Run { part p : A; }
+            }
+            "#,
+        ),
+        (
+            // Seven other `def` kinds are accepted in this exact position.
+            "action def nested in a part-definition body",
+            r#"
+            package Foo {
+                part def Outer {
+                    action def Inner { }
+                }
+            }
+            "#,
+        ),
+        (
+            // OMG: 29 interface usage members inside part bodies.
+            "interface usage as a part-definition body member",
+            r#"
+            package Foo {
+                port def P;
+                interface def I { end p1 : P; end p2 : P; }
+                part def A { port p : P; }
+                part def B {
+                    part x : A;
+                    part y : A;
+                    interface xy : I;
+                }
+            }
+            "#,
+        ),
+        (
+            // OMG: ptc-25-04-31.sysml `exhibit state vehicleStates parallel {`
+            "exhibit state with the parallel modifier",
+            r#"
+            package Foo {
+                part def A {
+                    exhibit state s parallel {
+                        state on;
+                        state off;
+                    }
+                }
+            }
+            "#,
+        ),
+        (
+            // OMG: StructuredControlTest.sysml:32
+            "typed loop variable in a for loop",
+            r#"
+            package Foo {
+                action def Run {
+                    for n : ScalarValues::Integer in (1, 2, 3) { action inner; }
+                }
+            }
+            "#,
+        ),
+    ] {
+        for mode in [
+            sysml_v2_cli::lint::LintMode::Strict,
+            sysml_v2_cli::lint::LintMode::Edit,
+        ] {
+            let (ok, errors) = sysml_v2_cli::lint::lint_source_mode(src, mode);
+            assert!(
+                !ok,
+                "{mode:?} unexpectedly accepts {label} — the upstream gap may be \
+                 closed; see the note above"
+            );
+            assert!(!errors.is_empty());
+        }
+    }
+}
 
-    // Default is strict.
-    let (ok_default, _) = sysml_v2_cli::lint::lint_source(src);
-    assert_eq!(ok_default, ok_strict);
+#[test]
+fn accepts_the_valid_forms_of_constructs_we_once_misreported() {
+    // Five entries were withdrawn from the gap list above after review: our models
+    // were wrong, not the parser. These assert the *correct* SysML v2 spelling of
+    // each, so the corrected models cannot silently regress and the withdrawals
+    // cannot quietly come back.
+    for (label, src) in [
+        (
+            "verification def, not `test case def`",
+            "package P { part def W; requirement def R; \
+             verification def V { subject s : W; verify r : R; } }",
+        ),
+        (
+            "sequence constructor, not a bare comma list",
+            "package P { part def G; part def F { part rs : G[*]; } \
+             part def B :> F { part p : G; part t : G; part :>> rs = (p, t); } }",
+        ),
+        (
+            "for, not foreach",
+            "package P { action def R { for x in xs { action i; } } }",
+        ),
+        (
+            "allocate with plain endpoints, no kind keyword",
+            "package P { part def J; action def S; \
+             part def T { part pr : J; action st : S; allocate st to pr; } }",
+        ),
+        (
+            "one then per succession statement",
+            "package P { action def L { action a; action b; action c; \
+             first a then b; then c; } }",
+        ),
+    ] {
+        for mode in [
+            sysml_v2_cli::lint::LintMode::Strict,
+            sysml_v2_cli::lint::LintMode::Edit,
+        ] {
+            let (ok, errors) = sysml_v2_cli::lint::lint_source_mode(src, mode);
+            assert!(
+                ok,
+                "{mode:?} should accept {label}, got {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            );
+        }
+    }
 }
 
 #[test]

@@ -14,6 +14,15 @@ Validate SysML v2 file syntax.
 | `--json`
 | Emit a JSON array instead of human-readable text.
 
+| `--mode <strict\|edit>`
+| Which parser entry point reports the errors. `strict` (the default) uses
+  `parse` and stops at the first error; `edit` uses `parse_for_editor` and
+  reports every recoverable problem in the file, as an editor or LSP would.
+  Both reach the same verdict as of `sysml-v2-parser` 0.50.0, so this affects
+  how many diagnostics you get rather than whether a file passes — see
+  xref:../how-to/lint-sysml-files.adoc#choose-how-much-detail-you-get[choosing a
+  mode].
+
 | `--resolve-imports`
 | Additionally resolve `import` statements against `--lib-dir` and flag
   unresolved imports/references (category `UnresolvedSymbol`). Off by

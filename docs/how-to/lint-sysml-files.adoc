@@ -36,28 +36,57 @@ open --raw resources.sysml | lint sysml
 Returns a record `{ok, errors}` rather than text — see
 xref:use-the-nushell-plugin.adoc[using the Nushell plugin].
 
-== Work around a known parser limitation
+== Choose how much detail you get
 
-`sysml-v2-parser` 0.29.0 mis-tracks brace nesting when a usage's inline
-redefinition body has its closing `}` on the same line as the last
-statement inside it, e.g.:
+`sysml-v2-parser` has two entry points, and `lint` lets you pick:
 
-[source,sysml]
+[source,bash]
 ----
-port cameraOut : P { attribute address : String = "tcp://*:5555"; }
-----
-
-This is reported as a spurious `missing closing '}'` at end of file, even
-though the SysML is valid. Put the closing brace on its own line to work
-around it:
-
-[source,sysml]
-----
-port cameraOut : P {
-    attribute address : String = "tcp://*:5555";
-}
+sysml-v2-cli lint --mode strict resources.sysml   # the default
+sysml-v2-cli lint --mode edit   resources.sysml
 ----
 
-`sysml-v2-cli/tests/lint.rs::same_line_inline_redefinition_body_is_a_known_parser_limitation`
-documents this; if it starts failing, the upstream bug has been fixed and
-files can go back to the single-line form if desired.
+Since `sysml-v2-parser` 0.50.0 the two agree on the *verdict* for every file, so
+this is a choice about diagnostic verbosity rather than about which answer to
+believe:
+
+`strict` (default)::
+  Stops at the first error. The right choice for a CI gate.
+
+`edit`::
+  The error-recovery path, the one an editor or LSP sees. Reports every problem in
+  the file rather than the first, which is what you want when fixing a model.
+
+Before 0.50.0 the two disagreed in both directions, and `strict` would silently
+drop a declaration it could not parse — so a missing semicolon or a misspelled
+keyword could pass `lint` entirely.
+If you are comparing against an older run, that is why counts changed.
+xref:../specs/02-parser-inconsistency.adoc[Spec 02] records the whole history.
+
+== Expect failures on known parser gaps
+
+Current as of `sysml-v2-parser` 0.50.0.
+
+0.50.0 made `strict` report what it used to drop, which surfaced grammar gaps that
+had been hidden.
+28 models in this workspace now fail `lint` on constructs that are legal SysML v2
+but that the parser does not yet cover, including:
+
+* `part :>> name { … }` in a part usage body — reported, misleadingly, as
+  `expected unit name inside '[ ]'`
+* `part p : A;`, `foreach`, `assert constraint` and `variation` in an action body
+* `allocate … to …;` in a part-definition body
+* a multi-line `interface X : Y` followed by a `connect …;` clause
+* `test case def …`
+
+*Do not rewrite a model to satisfy these.* They are upstream gaps; nothing in this
+crate can close them, since `lint` only chooses which entry point to call.
+xref:../specs/03-verdict-parity-fallout.adoc[Spec 03] lists every affected file,
+the diagnostic counts, and the minimal reproductions to raise upstream.
+
+One thing 0.50.0 does catch that is worth acting on: `part def X : Y` is invalid —
+a `part def` specializes with `:>`. The diagnostic names the fix.
+
+`sysml-v2-cli/tests/lint.rs` pins the current behaviour of each gap, so the release
+that closes them fails the suite and prompts these notes to be retired rather than
+letting them go quietly out of date.

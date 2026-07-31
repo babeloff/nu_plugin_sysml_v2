@@ -60,10 +60,10 @@ struct LintArgs {
     #[arg(long)]
     json: bool,
 
-    /// Which parser decides validity. `strict` (default) asks the grammar
-    /// whether the file is valid; `edit` asks the error-recovery parser, as an
-    /// editor or LSP would, which reports more — including constructs recovery
-    /// does not cover, such as `allocate` in a part-definition body.
+    /// Which parser reports the errors. Both reach the same verdict since
+    /// sysml-v2-parser 0.50.0; `strict` (default) stops at the first error,
+    /// `edit` uses the error-recovery parser and reports every problem in the
+    /// file, as an editor or LSP would.
     #[arg(long, value_enum, default_value_t = Mode::Strict)]
     mode: Mode,
 

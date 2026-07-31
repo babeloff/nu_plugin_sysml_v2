@@ -48,24 +48,22 @@ struct FileReport {
 
 /// Which parser entry point decides whether a file is valid.
 ///
-/// The two disagree, and each is right for a different job. The recovery path
-/// behind [`parse_for_editor`] does not implement every production the strict
-/// parser does, so it reports valid SysML as errors — `allocate` in a
-/// part-definition body, `part` in an action-definition body, and `foreach` in
-/// an action body all parse strictly but are rejected by recovery. What recovery
-/// gives in exchange is a diagnostic per problem on half-written source, which
-/// is what an editor needs.
+/// Since `sysml-v2-parser` 0.50.0 the two agree on the verdict for every file
+/// measured, so this selects how much detail you get rather than which answer to
+/// believe. Before 0.50.0 they diverged in both directions — the strict path
+/// silently dropped declarations it could not parse, and the recovery path
+/// rejected constructs it had not implemented; see
+/// `docs/specs/02-parser-inconsistency.adoc`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LintMode {
-    /// Verdict from the strict parser: a file is valid if the grammar accepts
-    /// it. The default, and the right choice for validating a finished model or
-    /// gating CI.
+    /// Verdict from the strict parser, which stops at the first error. The
+    /// default, and the right choice for validating a finished model or gating
+    /// CI.
     #[default]
     Strict,
     /// Verdict from the error-recovery parser, as an editor or LSP would see it:
-    /// every recoverable problem is reported, and constructs recovery does not
-    /// cover are reported too. Useful while writing a file, or to see what
-    /// tooling built on the recovery path will complain about.
+    /// every recoverable problem is reported rather than just the first. Useful
+    /// while writing a file, or when fixing a model with several errors in it.
     Edit,
 }
 

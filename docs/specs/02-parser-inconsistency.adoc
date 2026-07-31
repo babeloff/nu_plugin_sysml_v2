@@ -2,14 +2,24 @@
 :toc: left
 :toclevels: 3
 
-`sysml-v2-parser` exposes two entry points, and they disagree about what a valid
-SysML v2 file is.
-Neither is a superset of the other: each accepts things the other rejects.
+[NOTE]
+====
+*Largely resolved in `sysml-v2-parser` 0.50.0.*
+The two entry points now agree on the verdict for every file measured.
+One criterion remains unmet — see <<What is still open>> — and resolving the
+divergence turned a set of previously-passing models into hard failures, recorded
+separately in xref:03-verdict-parity-fallout.adoc[spec 03].
+====
 
-This spec records the measured divergence, why `lint` exposes it as a `--mode`
-flag rather than picking one silently, and what a fix would have to achieve.
+`sysml-v2-parser` exposes two entry points, and through 0.49.0 they disagreed
+about what a valid SysML v2 file is.
+Neither was a superset of the other: each accepted things the other rejected.
 
-Measured against `sysml-v2-parser` 0.48.0.
+This spec records the measured divergence, why `lint` exposed it as a `--mode`
+flag rather than picking one silently, and how 0.50.0 closed it.
+
+Originally measured against 0.48.0, re-measured unchanged against 0.49.0, and
+re-measured against 0.50.0 — see <<Status as of 0.50.0>>.
 
 == The two entry points
 
@@ -34,12 +44,15 @@ Measured against `sysml-v2-parser` 0.48.0.
 | `lint --mode edit`, plugin `lint sysml --mode edit`
 |===
 
-== The divergence runs both ways
+== The divergence ran both ways
 
-=== Recovery rejects valid SysML
+Both tables below describe 0.48.0 and 0.49.0 behaviour.
 
-Constructs the grammar accepts and the recovery path does not implement.
-These are *false positives*: correct models reported as broken.
+=== Recovery rejected valid SysML
+
+Constructs the strict parser accepted and the recovery path did not implement.
+These were read at the time as *false positives*: correct models reported as
+broken.
 
 [cols="2,1,1"]
 |===
@@ -67,18 +80,31 @@ These are *false positives*: correct models reported as broken.
 | rejects
 |===
 
-The last row is xref:01-fix-comment-doc.adoc[its own spec] — the recovery path
-resumes scanning inside a comment body.
+The last row was xref:01-fix-comment-block.adoc[its own spec] — the recovery path
+resumed scanning inside a comment body.
 
-For calibration, these are handled identically by both: a one-line `package`,
-`individual` with a body, `require constraint { … }`, `flow a.o to b.i;`, and
-`calc def` with a `return` expression.
+That reading of the other four rows turned out to be *wrong*, and 0.50.0 is what
+disproved it: strict was not parsing those constructs, it was silently dropping
+them.
+See <<Status as of 0.50.0>>.
 
-=== Strict silently accepts invalid SysML
+Two of those four went further still: `foreach` is not a SysML v2 keyword at all —
+the loop keyword is `for` — and `snapshot` has no precedent inside an action body.
+So the table above records two constructs this workspace's models should never have
+used, listed here as though the parser were at fault.
+Both are now corrected in the models; see
+xref:03-verdict-parity-fallout.adoc#_the_real_defects_found[spec 03].
 
-The strict parser returns `Ok` for input it cannot parse, dropping what it does
+For calibration, these were handled identically by both: a one-line `package`,
+`individual` with a body, `require constraint { … }` in a `requirement def` or
+`requirement` usage body, `flow a.o to b.i;`, and `calc def` with a `return`
+expression.
+
+=== Strict silently accepted invalid SysML
+
+The strict parser returned `Ok` for input it could not parse, dropping what it did
 not understand instead of reporting it.
-These are *false negatives*: real mistakes that pass.
+These were *false negatives*: real mistakes that passed.
 
 [cols="2,1,1"]
 |===
@@ -114,18 +140,228 @@ These are *false negatives*: real mistakes that pass.
 |===
 
 Confirmed at the library level, not just through the CLI: for `parts def A { }`,
-`parse` returns `Ok` with a `RootNamespace` of one element — the package — and the
-malformed declaration simply absent.
-Structural brace errors are the class strict does catch, because they break the
+`parse` returned `Ok` with a `RootNamespace` of one element — the package — and
+the malformed declaration simply absent.
+Structural brace errors were the class strict did catch, because they break the
 document's shape rather than one declaration's syntax.
 
-Neither mode catches everything: `%%% garbage %%%` inside a part-definition body
-is accepted by both.
+Neither mode caught everything: `%%% garbage %%%` inside a part-definition body
+was accepted by both.
+
+== Status as of 0.50.0
+
+The divergence is closed.
+Across the 72-case matrix behind this spec and spec 01, *all 72 cases now produce
+the same verdict from both entry points*, up from 42.
+
+[cols="3,1,1,1"]
+|===
+| Criterion | 0.48.0/0.49.0 | 0.50.0 | Notes
+
+| 1 — recovery accepts every valid construct in the first table
+| unmet
+| *superseded*
+| The premise was wrong; see below.
+
+| 2 — both paths reject every malformed input in the second table
+| unmet
+| *met*
+| Strict now reports what it used to drop.
+
+| 3 — the two paths agree on the verdict for every file
+| unmet
+| *met*
+| 72/72.
+
+| 4 — `%%% garbage %%%` rejected by both
+| unmet
+| unmet
+| Still accepted by both.
+|===
+
+=== What 0.50.0 changed
+
+Upstream's `parse_root` verdict-parity work (PR `#3`, tracked as
+`PARSER_BACKLOG_ROADMAP.md` §6, an audit dated 2026-07-30) made the strict entry
+point stop silently accepting what it could not parse.
+That single change is what met criteria 2 and 3.
+
+It also invalidated criterion 1's premise.
+Upstream's own audit note is explicit that the §6 grammar gaps were "previously
+masked by `parse_root` silently accepting them" — so `allocate`, `part` in an
+action-definition body, `foreach` and `snapshot` were never being parsed by
+strict.
+Strict's `Ok` was the false negative from the second table, not evidence that the
+grammar accepted them.
+With the masking gone, all four are now rejected by *both* entry points, which is
+consistent behaviour over an incomplete grammar rather than a disagreement.
+
+The `require constraint { … }` case this spec previously flagged as an open
+question resolves the same way: it is now rejected by both in a part-definition
+body, and accepted by both in a `requirement def` or `requirement` usage body.
+
+=== What is still open
+
+Criterion 4: `%%% garbage %%%` in a part-definition body is still accepted by both
+entry points.
+`sysml-v2-cli/tests/lint.rs::both_modes_reject_malformed_declarations` records
+that gap alongside the six inputs that are now caught.
+
+Written up for upstream in <<Upstream bug report>>.
+
+== Upstream bug report
+
+One item, *filed as
+https://github.com/elan8/sysml-v2-parser/issues/12[issue #12]* and open.
+Verified against 0.50.0, and re-verified still present on `main` at `84b841a`.
+The examples below are deliberately generic — nothing here depends on this
+workspace's models.
+
+=== Issue trail
+
+This spec's findings produced three upstream issues:
+
+[cols="1,2,1"]
+|===
+| Issue | Subject | State
+
+| https://github.com/elan8/sysml-v2-parser/issues/2[#2]
+| The divergence itself — this spec's subject
+| closed, fixed in 0.50.0 by PR
+  https://github.com/elan8/sysml-v2-parser/pull/3[#3]
+
+| https://github.com/elan8/sysml-v2-parser/issues/12[#12]
+| <<Arbitrary non-SysML text is accepted inside part bodies>> — criterion 4, the
+  remainder
+| open
+
+| https://github.com/elan8/sysml-v2-parser/issues/1[#1]
+| The comment-recovery instance, split out as
+  xref:01-fix-comment-block.adoc[spec 01]
+| closed, fixed in 0.50.0 by PR
+  https://github.com/elan8/sysml-v2-parser/pull/4[#4]
+|===
+
+Fixing `#2` is what exposed the grammar gaps recorded in
+xref:03-verdict-parity-fallout.adoc[spec 03], four of which are now filed as
+issues `#13`, `#14`, `#16` and `#17` — see that spec's filing status for the full
+mapping.
+
+=== Arbitrary non-SysML text is accepted inside part bodies
+
+*Summary.*
+Both `parse` and `parse_for_editor` accept a part definition or part usage body
+containing text that is not SysML at all, reporting no diagnostic and silently
+producing an AST with the content absent.
+Every other body kind rejects the same text.
+
+*Reproduction.*
+
+[source,sysml]
+----
+package Shop {
+    part def Wheel {
+        %%% this is not SysML at all %%%
+    }
+}
+----
+
+*Expected.* A syntax error, from both entry points.
+
+*Actual.* `lint --mode strict` and `lint --mode edit` both report `ok`, exit 0.
+
+*Scope.* The gap is confined to the two part body kinds:
+
+[cols="2,1,1"]
+|===
+| Body containing `%%% this is not SysML at all %%%` | `parse` | `parse_for_editor`
+
+| `part def A { … }`
+| *accepts*
+| *accepts*
+
+| `part a : A { … }`
+| *accepts*
+| *accepts*
+
+| `package P { … }`
+| rejects
+| rejects
+
+| `action def A { … }`
+| rejects
+| rejects
+
+| `attribute def A { … }`
+| rejects
+| rejects
+
+| `port def A { … }`
+| rejects
+| rejects
+|===
+
+The `package` case rejects with `unexpected token in package body`, which is the
+diagnostic the part cases should be producing too.
+
+*Why it matters.*
+This is the last surviving case of the class 0.50.0's verdict-parity work set out
+to eliminate — input the parser cannot understand being dropped rather than
+reported.
+It is narrower than the pre-0.50.0 behaviour, since ordinary typos are now caught,
+but the failure mode is the same: a clean parse is not proof the input was
+understood.
+Because `part def` and `part usage` bodies are where most of a structural model
+lives, it is a consequential place for the gap to remain.
+
+*Suggested fix.* Route the part definition and part usage body element dispatch
+through the same unrecognized-token diagnostic the package body path already uses,
+rather than letting an unmatched alternative fall through as success.
+
+=== Consequence: the fallout
+
+Making strict honest surfaced every grammar gap it had been hiding, across this
+workspace's models as well as upstream's own validation corpus.
+29 project-authored `.sysml` files that passed `lint` under 0.49.0 initially failed
+it; 18 still do, the other 11 having turned out to be defects in the models rather
+than parser gaps.
+
+That is not a regression in this crate and not a defect in the models; it is
+previously-hidden information becoming visible.
+It is recorded, classified and quantified in
+xref:03-verdict-parity-fallout.adoc[spec 03].
+
+== Why `lint` exposed a flag rather than choosing
+
+Kept for provenance; the reasoning below describes 0.48.0–0.49.0.
+
+Both answers were useful, and neither was trustworthy alone.
+
+`strict` was the default::
+  It answered the question a validator is asked — does the grammar accept this
+  file — and it did not reject correct models.
+  Its blind spot was that a typo could pass, so a clean `lint` run was weaker
+  evidence than it looked.
+
+`edit` was available::
+  It reported every problem in a file rather than the first, which is what makes
+  diagnostics usable, and it caught the ordinary typos strict dropped.
+  Its cost was false positives on valid constructs, which made it unusable as a
+  gate.
+
+Running both and reading the union was then the most thorough check available.
+
+Under 0.50.0 that advice is obsolete: the verdict is the same either way, so
+`--mode` is now a choice about *diagnostic verbosity* — one error or all of them —
+which is the legitimate difference between the two entry points.
 
 == Effect on this workspace's models
 
-All sixteen models in the surrounding campaign repositories pass `strict`.
-Four fail `edit`, entirely on the constructs in <<Recovery rejects valid SysML>>:
+Historical, as measured under 0.48.0/0.49.0.
+
+All sixteen models in the surrounding campaign repositories passed `strict`.
+Five failed `edit`, entirely on the constructs in
+<<Recovery rejected valid SysML>>:
 
 [cols="2,1,1"]
 |===
@@ -139,49 +375,33 @@ Four fail `edit`, entirely on the constructs in <<Recovery rejects valid SysML>>
 | the other eleven | ok | 0
 |===
 
-This is why the divergence matters in practice rather than in theory: before the
+This is why the divergence mattered in practice rather than in theory: before the
 mode flag existed, `lint` used the recovery path, and the five models carrying the
 campaign design could not be validated at all.
 Their failures were read as model defects for some time; they were not.
 
-== Why `lint` exposes a flag rather than choosing
+Under 0.50.0 these same five files fail *both* modes with the same counts, because
+the constructs they use are genuine grammar gaps — see
+xref:03-verdict-parity-fallout.adoc[spec 03].
 
-Both answers are useful, and neither is trustworthy alone.
+=== A set this table does not cover
 
-`strict` is the default::
-  It answers the question a validator is asked — does the grammar accept this
-  file — and it does not reject correct models.
-  Its blind spot is that a typo can pass, so a clean `lint` run is weaker
-  evidence than it looks.
+The five `.sysml` files under
+`campaign/00-meta-campaign/docs/explanation/sysml/` failed `strict` as well as
+`edit` under 0.49.0, so they were outside the sixteen counted above.
+They open with a top-level annotation application carrying `:>>` bindings:
 
-`edit` is available::
-  It reports every problem in a file rather than the first, which is what makes
-  diagnostics usable, and it catches the ordinary typos strict drops.
-  Its cost is false positives on valid constructs, which makes it unusable as a
-  gate today.
+[source,sysml]
+----
+@ActionFlowViewMeta {
+    :>> direction = LayoutDirection::TB;
+}
+----
 
-Running both and reading the union is currently the most thorough check
-available: `strict` for the verdict, `edit` for a list of suspicious lines to
-inspect by hand, discounting the known false-positive constructs above.
-
-== Acceptance criteria for a fix
-
-A fix lives upstream in `sysml-v2-parser`; nothing in this crate can reconcile the
-two paths, since `lint` only chooses which to call.
-
-. Every construct in <<Recovery rejects valid SysML>> is accepted by *both* entry
-  points.
-. Every malformed input in <<Strict silently accepts invalid SysML>> is rejected
-  by *both* entry points.
-. The two entry points agree on the verdict for every file; they may still differ
-  in how many diagnostics they report, which is the legitimate difference between
-  them.
-. `%%% garbage %%%` in a part-definition body is rejected by both.
-
-Once 1 and 2 hold, `--mode` becomes a choice about diagnostic verbosity rather
-than about which answer to believe, and this crate's regression tests
-(`sysml-v2-cli/tests/lint.rs::strict_and_edit_modes_disagree_about_allocate`)
-should be inverted to assert agreement.
+These files are inputs to a separate diagram generator rather than models this
+crate is asked to validate.
+0.50.0 improves one of them — `action-flow-viewpoint.sysml` now passes — via the
+new `metadata_keyword_prefix` support; the other four still fail.
 
 == Provenance
 
@@ -191,3 +411,7 @@ were the visible behaviour and the false negatives were unknown.
 Switching the verdict to `parse` made the models pass and exposed the opposite
 failure mode.
 Both directions were then measured deliberately, which produced the tables above.
+
+0.50.0 closed it from the strict side, and in doing so showed that half of what
+had been measured — the first table — was an artifact of the false negatives in
+the second.
