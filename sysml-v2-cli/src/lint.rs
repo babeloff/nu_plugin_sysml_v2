@@ -52,8 +52,9 @@ struct FileReport {
 /// measured, so this selects how much detail you get rather than which answer to
 /// believe. Before 0.50.0 they diverged in both directions — the strict path
 /// silently dropped declarations it could not parse, and the recovery path
-/// rejected constructs it had not implemented; see
-/// `docs/specs/02-parser-inconsistency.adoc`.
+/// rejected constructs it had not implemented. That divergence is why this enum
+/// exists at all; `both_modes_reject_malformed_declarations` in `tests/lint.rs`
+/// is what keeps the two from drifting apart again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LintMode {
     /// Verdict from the strict parser, which stops at the first error. The

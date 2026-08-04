@@ -147,8 +147,7 @@ fn comment_prose_is_not_read_as_a_declaration() {
     // when a continuation line read `<identifier>: <text>`, but only inside a
     // *part definition* body, and report the prose as a feature declaration.
     //
-    // This is criterion 3 of the now-retired docs/specs/01-fix-comment-block.adoc:
-    // both modes must accept the reproduction, for all three comment forms, so a
+    // Both modes must accept the reproduction, for all three comment forms, so a
     // future parser bump that reintroduces the defect fails here rather than
     // silently changing what models may say.
     for open in ["/**", "/*", "doc /*"] {
@@ -178,7 +177,7 @@ fn comment_prose_is_not_read_as_a_declaration() {
 
 #[test]
 fn both_modes_reject_malformed_declarations() {
-    // Criterion 2 of docs/specs/02-parser-inconsistency.adoc, met in 0.50.0.
+    // Verdict parity for malformed input, met in 0.50.0.
     //
     // Through 0.49.0 the strict parser returned `Ok` for a body declaration it
     // could not parse, dropping it instead of reporting it — so a typo passed
@@ -215,21 +214,23 @@ fn both_modes_reject_malformed_declarations() {
         }
     }
 
-    // Criterion 4 is still unmet: neither mode rejects this. Recorded so the gap
-    // is not mistaken for coverage.
+    // Criterion 4, met in 0.53.0. Through 0.50.0 *neither* mode rejected this and
+    // the gap was recorded here so it would not be mistaken for coverage; both now
+    // report `unexpected token in part definition body`.
     let garbage = "package P { part def A { %%% garbage %%% } }";
     for mode in [
         sysml_v2_cli::lint::LintMode::Strict,
         sysml_v2_cli::lint::LintMode::Edit,
     ] {
-        let (ok, _) = sysml_v2_cli::lint::lint_source_mode(garbage, mode);
-        assert!(ok, "{mode:?} is still expected to miss `%%% garbage %%%`");
+        let (ok, errors) = sysml_v2_cli::lint::lint_source_mode(garbage, mode);
+        assert!(!ok, "{mode:?} should reject `%%% garbage %%%`");
+        assert!(!errors.is_empty(), "{mode:?} should explain `%%% garbage %%%`");
     }
 }
 
 #[test]
 fn both_modes_reject_uncovered_grammar() {
-    // Constructs that are legal SysML v2 but that sysml-v2-parser 0.50.0 does not
+    // Constructs that are legal SysML v2 but that sysml-v2-parser 0.53.0 does not
     // implement. Both entry points reject them, consistently — these are grammar
     // gaps, not a mode disagreement.
     //
@@ -242,58 +243,12 @@ fn both_modes_reject_uncovered_grammar() {
     //
     // Do not "fix" a model to satisfy this test. When a release closes one of
     // these, this test fails — that is the signal to update spec 03.
+    //
+    // 0.53.0 closed four of the six entries this list carried against 0.50.0:
+    // part usage in an action-def body, action def nested in a part-def body,
+    // interface usage as a part-def body member, and `exhibit state … parallel`.
+    // All four now parse. See spec 03.
     for (label, src) in [
-        (
-            // OMG: Parts.sysml:51, 3e-Function-based Behavior-item.sysml:28
-            "part usage in an action-definition body",
-            r#"
-            package Foo {
-                part def A { attribute x : String; }
-                action def Run { part p : A; }
-            }
-            "#,
-        ),
-        (
-            // Seven other `def` kinds are accepted in this exact position.
-            "action def nested in a part-definition body",
-            r#"
-            package Foo {
-                part def Outer {
-                    action def Inner { }
-                }
-            }
-            "#,
-        ),
-        (
-            // OMG: 29 interface usage members inside part bodies.
-            "interface usage as a part-definition body member",
-            r#"
-            package Foo {
-                port def P;
-                interface def I { end p1 : P; end p2 : P; }
-                part def A { port p : P; }
-                part def B {
-                    part x : A;
-                    part y : A;
-                    interface xy : I;
-                }
-            }
-            "#,
-        ),
-        (
-            // OMG: ptc-25-04-31.sysml `exhibit state vehicleStates parallel {`
-            "exhibit state with the parallel modifier",
-            r#"
-            package Foo {
-                part def A {
-                    exhibit state s parallel {
-                        state on;
-                        state off;
-                    }
-                }
-            }
-            "#,
-        ),
         (
             // OMG: StructuredControlTest.sysml:32
             "typed loop variable in a for loop",
@@ -301,6 +256,27 @@ fn both_modes_reject_uncovered_grammar() {
             package Foo {
                 action def Run {
                     for n : ScalarValues::Integer in (1, 2, 3) { action inner; }
+                }
+            }
+            "#,
+        ),
+        (
+            // Surfaced by 0.52.0, which routed connection/interface def bodies
+            // through the recovery-node path and wired collect_errors to walk them
+            // — so diagnostics that were silently dropped became visible. 0.50.0
+            // accepted this by discarding it, not by parsing it.
+            //
+            // Corroborated 56 times in the OMG official pilot examples (e.g.
+            // `toolName = "ModelCenter";`, `status = StatusKind::tbd;`), so it is a
+            // parser gap. It is also what every granule's resources.sysml uses to
+            // set GranuleArtifact fields, which is why 13 of them went red on the
+            // 0.53.0 bump. Do not rewrite them to `attribute :>> name = …`.
+            "bare feature value assignment in a part usage body",
+            r#"
+            package Foo {
+                part def Artifact { attribute packageName : String; }
+                part thing : Artifact {
+                    packageName = "thing";
                 }
             }
             "#,

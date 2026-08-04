@@ -61,31 +61,46 @@ Before 0.50.0 the two disagreed in both directions, and `strict` would silently
 drop a declaration it could not parse — so a missing semicolon or a misspelled
 keyword could pass `lint` entirely.
 If you are comparing against an older run, that is why counts changed.
-xref:../specs/02-parser-inconsistency.adoc[Spec 02] records the whole history.
 
 == Expect failures on known parser gaps
 
-Current as of `sysml-v2-parser` 0.50.0.
+Current as of `sysml-v2-parser` 0.53.0.
+142 of 568 project models fail `lint` on constructs that are legal SysML v2 but that
+the parser does not yet cover.
 
-0.50.0 made `strict` report what it used to drop, which surfaced grammar gaps that
-had been hidden.
-28 models in this workspace now fail `lint` on constructs that are legal SysML v2
-but that the parser does not yet cover, including:
+0.53.0 closed most of the gaps this section used to list.
+Verified by direct probe as now *accepted*:
 
-* `part :>> name { … }` in a part usage body — reported, misleadingly, as
-  `expected unit name inside '[ ]'`
-* `part p : A;`, `foreach`, `assert constraint` and `variation` in an action body
+* `part p : A;` in an action-definition body
+* `action def X { … }` nested in a part-definition body
+* `interface x : T;` as a part-definition body member
+* `exhibit state X parallel { … }`
+* `part :>> name { … }` in a part usage body
+* `assert constraint { … }` and `variation` in an action body
 * `allocate … to …;` in a part-definition body
-* a multi-line `interface X : Y` followed by a `connect …;` clause
-* `test case def …`
+
+Still open:
+
+* a typed loop variable — `for n : ScalarValues::Integer in (1, 2, 3)` — where the
+  untyped form is accepted
+* *new in 0.52.0:* a bare feature value assignment in a usage body, as in
+  `part x : T { packageName = "x"; }`.
+  0.52.0 made connection/interface body diagnostics visible for the first time and
+  this is what they revealed.
+  It is legal — 56 occurrences in the OMG official pilot examples — and it is the
+  form every granule's `resources.sysml` uses, so thirteen of them went red on the
+  bump.
 
 *Do not rewrite a model to satisfy these.* They are upstream gaps; nothing in this
 crate can close them, since `lint` only chooses which entry point to call.
 xref:../specs/03-verdict-parity-fallout.adoc[Spec 03] lists every affected file,
-the diagnostic counts, and the minimal reproductions to raise upstream.
+the diagnostic counts, the minimal reproductions to raise upstream, and the
+re-measurement against 0.53.0.
 
-One thing 0.50.0 does catch that is worth acting on: `part def X : Y` is invalid —
-a `part def` specializes with `:>`. The diagnostic names the fix.
+Two things `lint` catches that *are* worth acting on, because they are genuinely not
+SysML v2: `part def X : Y` — a `part def` specializes with `:>`, and the diagnostic
+names the fix — and `%%% garbage %%%`-style unparseable content in a body, which
+both modes reject as of 0.53.0 and neither caught before it.
 
 `sysml-v2-cli/tests/lint.rs` pins the current behaviour of each gap, so the release
 that closes them fails the suite and prompts these notes to be retired rather than

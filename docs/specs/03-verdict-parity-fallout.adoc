@@ -4,7 +4,7 @@
 
 `sysml-v2-parser` 0.50.0 stopped the strict parser silently accepting input it
 could not parse.
-That was the fix xref:02-parser-inconsistency.adoc[spec 02] asked for, and it
+That was the fix the verdict-parity work asked for, and it
 worked — but it also revealed every grammar gap the silence had been hiding.
 
 18 project-authored `.sysml` files that passed `lint` under 0.49.0 now fail it.
@@ -13,6 +13,151 @@ a known quantity rather than a mystery.
 
 Measured against `sysml-v2-parser` 0.50.0, comparing `lint --mode strict` verdicts
 against a 0.49.0 build of the same crate.
+
+== Status as of 0.53.0
+
+The crate was bumped 0.50.0 → 0.53.0 on 2026-08-04.
+Four of the gaps this spec reported are closed, one new gap appeared, and the
+project-authored red set changed shape rather than shrinking.
+
+Closed upstream, each verified by direct probe against 0.53.0, and *removed from this
+spec* along with their write-ups — a fixed bug is not a finding:
+
+* `part p : A;` and the other `ActionBodyItem` members in an `action def` body
+  (issue #13, was Bug 1)
+* `action def X { … }` nested in a part-definition body (issue #14, was Bug 2)
+* `interface x : T;` as a part-definition body member (issue #16, was Bug 5)
+* `exhibit state X parallel { … }` (issue #17, was Bug 9)
+
+Also probed as accepted, though they were never separate reports here:
+`part :>> name { … }` in a part usage body, `assert constraint { … }` and `variation`
+in an action body, and `allocate … to …;` in a part-definition body.
+
+<<Bug 16: typed loop variable in a `for` loop>> is still open.
+Bugs 10, 11, 12, 14 and 15 were *not* re-measured — treat their status here as
+unverified against 0.53.0 rather than unchanged.
+The surviving bug numbers are left as they are, so anything already citing them still
+resolves.
+
+Also closed, the last of the verdict-parity criteria:
+`package P { part def A { %%% garbage %%% } }` was accepted by both modes through
+0.50.0 and is now rejected by both, as `unexpected token in part definition body`.
+
+=== The new gap: bare feature value assignment in a usage body
+
+0.52.0 routed `connection_def_body` and `interface_def_body` through the same
+recovery-node path the rest of the parser uses, and wired `collect_errors` to walk
+those bodies *at all* — previously neither was ever collected into
+`parse_with_diagnostics`, at any nesting level.
+Diagnostics that had been silently dropped therefore became visible for the first
+time, which is the same unmasking that produced this spec, one layer further in.
+
+What it surfaced here is the terse feature-value form:
+
+[source,sysml]
+----
+part 'kafka-probe' : GranuleArtifact {
+    packageName    = "kafka-probe";     // unrecognized declaration `packageName`
+    packageVersion = "0.1.0";           //   in part usage body
+}
+----
+
+This is corroborated 56 times in the OMG official pilot examples — `toolName =
+"ModelCenter";`, `status = StatusKind::tbd;`, `technicalRisk = medium;` and so on —
+so by the evidence standard this spec already applies, it is a parser gap and not a
+defect in our models.
+It is now the second entry in `both_modes_reject_uncovered_grammar`.
+
+*Do not rewrite the granule models to `attribute :>> packageName = …`.*
+Thirteen `resources.sysml` files use this form and all thirteen went red on the
+bump; rewriting them would encode a parser limitation into the models, which is
+what <<Do not "fix" the models — but do check the language first>> exists to
+prevent.
+
+[#literal-prefix]
+=== New bug: identifiers beginning with `null`, `true` or `false` are mis-lexed
+
+Not yet filed upstream — no issue in the tracker mentions it and 0.53.0 is the
+latest release.
+
+The three KerML *literal* keywords are matched with a bare `nom::tag`, without the
+trailing word-boundary assertion the rest of the parser applies, so an identifier
+that merely starts with one is split into the literal plus a trailing fragment:
+
+[source,sysml]
+----
+package P {
+    action c : Campaign {
+        flow env to nullPoint.env;    // unexpected token in action body
+        flow env to trueValue.env;    // same
+        flow env to falseAlarm.env;   // same
+        flow env to zeroPoint.env;    // fine
+    }
+}
+----
+
+Exactly three prefixes are affected, and the boundary check is demonstrably present
+elsewhere in the same file:
+
+[cols="2,3"]
+|===
+| Affected | Not affected
+
+| `null`, `true`, `false` — `expr.rs:138`, `:139`, `:285` use
+  `tag(&b"true"[..])` and friends directly.
+| `not`, `and`, `or`, `xor`, `implies`, `all`, `as`, `istype`, `hastype`, `meta`,
+  `new` — the operators in the *same file* go through `keyword_token`
+  (`expr.rs:402`, `:466`), which does check the boundary.
+
+|
+| Every declaration keyword — `part`, `in`, `out`, `flow`, `item`, `connect`,
+  `about`, `ref`, `state`, `action`, `attribute`, `if`, `then`, `else` — routed
+  through `lex.rs::starts_with_keyword`, which requires the next byte to be
+  whitespace or one of `{ : ; [`.
+|===
+
+Case matters: `NullPoint` parses, because the literals are lowercase.
+`nullpoint` and `null_point` both fail.
+
+The fix looks like a one-liner per site — route the three literal parsers through
+the `keyword_token` helper the operators beside them already use.
+
+The reported position is the recovery point rather than the offending token — in the
+original file the error landed on a *blank* line two lines further down, which is
+<<bug-15,Bug 15>> again.
+That is what made this expensive to find: bisection was necessary because the
+diagnostic pointed at whitespace.
+
+Found because the benchmark-surrogate campaign model used `nullPoint` for the
+experiment at which detections reach zero. Renamed to `zeroPoint`; no workaround is
+needed beyond not starting an identifier with one of the three literals.
+
+=== Re-measured counts
+
+Across 568 project `.sysml` files, excluding vendored libraries, `target/`,
+`.pixi/`, and `dist/` build trees:
+
+[cols="3,1,1"]
+|===
+| | 0.50.0 | 0.53.0
+
+| Failing `lint --mode strict`
+| 132
+| 142
+
+| Newly passing at 0.53.0 — of which 10 project-authored, 4 OMG reference
+| —
+| 14
+
+| Newly failing at 0.53.0 — of which 13 project-authored, 11 OMG reference
+| —
+| 24
+|===
+
+Every one of the 13 project-authored regressions is the single construct above, so
+the count understates the improvement: four real grammar gaps closed and ten
+project files went green, against one new gap accounting for all thirteen
+newly-red files.
 
 == This is not a regression in this crate
 
@@ -24,7 +169,8 @@ constructs that were never being parsed are now visible as errors.
 Upstream's own audit note (`PARSER_BACKLOG_ROADMAP.md` §6) states it plainly: the
 grammar gaps were "previously masked by `parse_root` silently accepting them".
 A clean `lint` run under 0.49.0 was therefore weaker evidence than it looked —
-which is exactly what spec 02's second table predicted, now demonstrated at scale.
+which is exactly what the verdict-parity analysis predicted, now demonstrated at
+scale.
 
 == The measurement
 
@@ -53,6 +199,7 @@ The 7 improvements come from 0.50.0's `loop`/`for`, requirement and
 requirement examples, `13_banking_use_cases.sysml`, and
 `campaign/00-meta-campaign/docs/explanation/sysml/action-flow-viewpoint.sysml`.
 
+[#what-is-failing]
 == What is failing, and why
 
 56 substantive diagnostics across the 18 files, plus cascade-suppression notices.
@@ -167,14 +314,15 @@ position is the header of an enclosing construct rather than anything resembling
 unit expression.
 It is a mis-selected alternative's error surfacing as the file's verdict, not a
 description of the input.
-Written up separately in <<bug-15,Bug 15>>.
+That symptom is gone as of 0.53.0, along with the grammar gaps that triggered it —
+see <<bug-15,Bug 15>>.
 
 === Do not "fix" the models — but do check the language first
 
 Every construct in the table above is legal SysML v2, except the chained-succession
 row, which is flagged there.
-Rewriting a model to satisfy the parser would be the same mistake spec 02 records
-having been made once already, when the recovery path's false positives "were read
+Rewriting a model to satisfy the parser would be the same mistake made once already,
+when the recovery path's false positives "were read
 as model defects for some time; they were not."
 
 `sysml-v2-cli/tests/lint.rs::both_modes_reject_uncovered_grammar` pins five of these
@@ -306,7 +454,9 @@ construct.
 It is not: the parser has no `test` token at all, and this is its generic report for
 an unrecognized leading identifier — the same wording it produces for
 `distancePerVolume` in <<bug-14,Bug 14>>.
-The phrasing is worth fixing upstream in its own right; filed as <<bug-15,Bug 15>>b.
+The phrasing was worth fixing upstream in its own right; filed as part of
+https://github.com/elan8/sysml-v2-parser/issues/18[issue #18] and fixed in 0.53.0,
+which now says ``unrecognized declaration `test` in package body``.
 
 === Model defect 3: bare comma list where a sequence constructor was meant
 
@@ -343,8 +493,9 @@ That is very likely correct — `[ ]` is multiplicity in SysML v2, not a sequenc
 literal — but it was not checked against the BNF, so it is an observation only, not a
 claim.
 
-The diagnostic this produced was itself misleading, and is filed as
-<<bug-15,Bug 15>>c.
+The diagnostic this produced was itself misleading. Filed as part of
+https://github.com/elan8/sysml-v2-parser/issues/18[issue #18] and fixed in 0.53.0,
+which now reports the comma's own position and names the fix.
 
 [CAUTION]
 ====
@@ -355,8 +506,8 @@ The same holds for `case def` and `use case def`.
 So these six files now *parse*, but their bodies are not being checked, and the
 `subject` / `verify` / `attribute` members inside them are effectively unverified.
 This is the same class of gap as
-xref:02-parser-inconsistency.adoc#_upstream_bug_report[issue #12] and is worth
-adding to it.
+https://github.com/elan8/sysml-v2-parser/issues/12[issue #12] and is worth adding
+to it.
 ====
 
 === Model defect 4: `foreach` is not SysML v2
@@ -458,7 +609,7 @@ Upstream's own tests name the same model —
 Only `workflow_14_grammar_probe.sysml` is in this spec's 18, and its name suggests
 the chained form may be there deliberately to probe the grammar.
 Cleaning up that directory is separate work, out of scope here — recorded so the row
-in <<What is failing, and why>> is not mistaken for an upstream gap.
+in <<what-is-failing,What is failing, and why>> is not mistaken for an upstream gap.
 
 == The failing files
 
@@ -499,8 +650,9 @@ All fail on upstream gaps only, except `workflow_14_grammar_probe.sysml` — see
   +
   `ptc-25-04-31.sysml` deserves note: it is the OMG PTC 2025 `SimpleVehicleModel`,
   not a model of ours.
-  It is the single richest source of gaps here — <<bug-9,9>>, <<bug-10,10>>,
-  <<bug-11,11>>, <<bug-12,12>> and all of <<bug-14,14>> come from it.
+  It is the single richest source of gaps here — <<bug-10,10>>, <<bug-11,11>>,
+  <<bug-12,12>>, all of <<bug-14,14>>, and the now-fixed `exhibit state … parallel`
+  come from it.
   A parser that cannot read the specification's own worked example is the clearest
   statement of where the remaining work is.
 
@@ -522,13 +674,14 @@ Six reports remain unfiled; see <<Filing status>>.
 
 Upstream is working the same ground from its own end: PR
 https://github.com/elan8/sysml-v2-parser/pull/15[#15] documents *G31* — guarded
-`succession a to b of <expr>;` not wired into action bodies — and *G32*, which is
-<<bug-2,Bug 2>>.
+`succession a to b of <expr>;` not wired into action bodies — and *G32*, the nested
+`action def` gap since fixed in 0.53.0.
 G31 does not appear in this workspace's models, so it is not reported here; it is
 worth knowing about because it is a third action-body gap, which strengthens the case
 that `ActionBodyElement` needs a pass rather than piecemeal fixes.
 
-Until those land, `lint` fails on 18 files.
+At the time of that measurement `lint` failed on 18 files; see <<Status as of 0.53.0>>
+for the re-measured counts.
 Nothing in this workspace can close them — `lint` only chooses which entry point
 to call — and the alternative, pinning back to 0.49.0, buys a green gate by
 restoring a parser that silently accepted typos.
@@ -547,42 +700,47 @@ isolates the gap rather than merely demonstrating a failure.
 
 === Filing status
 
-Four of the ten reports are filed.
-Tracker state as of 2026-07-30 — note that `#3`, `#4`, `#11` and `#15` are pull
-requests, not issues, which is why the issue numbers are not contiguous.
+*Every issue this project has filed upstream is closed* — verified against the
+tracker on 2026-08-04: `#1`, `#2`, `#10`, `#12`, `#13`, `#14`, `#16`, `#17`, `#18`.
+The four that had write-ups here (`#13`, `#14`, `#16`, `#17`) were fixed by 0.53.0 and
+removed along with them; see <<Status as of 0.53.0>>.
+Note that `#3`, `#4`, `#11` and `#15` are pull requests, not issues, which is why the
+numbers are not contiguous.
+
+The only two issues open upstream are the maintainer's own `tech-debt` items, neither
+a report of anything below: `#34` (deduplicate relationship-node builders and
+def/usage disambiguation options) and `#36` (opaque `advance_to_closing_brace` bodies
+discard content in alias/import/enum/dependency/connection/interface).
+`#36` is the same silent-discard mechanism that produced this spec, inventoried at its
+remaining call sites — including `occurrence_body.rs` and the connection/interface
+bodies — so it is the closest thing upstream has to a tracking issue for the two new
+gaps in <<Status as of 0.53.0>>.
 
 [cols="1,2,2,1"]
 |===
 | Report | Upstream issue | Subject | State
 
-| <<bug-1,Bug 1>>
-| https://github.com/elan8/sysml-v2-parser/issues/13[#13]
-| `ActionBodyItem` coverage — structural members in action bodies
-| open
+| <<bug-15,Bug 15>>
+| https://github.com/elan8/sysml-v2-parser/issues/18[#18]
+| Misleading diagnostics and spurious token-recovery failures — filed after this
+  spec's measurement, which is why the section below still reads as unfiled
+| closed 2026-07-31; 2 of 3 sub-cases fixed in 0.53.0, the wrong-position symptom
+  survives — see <<bug-15,Bug 15>>
 
-| <<bug-2,Bug 2>>
-| https://github.com/elan8/sysml-v2-parser/issues/14[#14]
-| `action def` nested inside a part definition body
-| open
-
-| <<bug-5,Bug 5>>
-| https://github.com/elan8/sysml-v2-parser/issues/16[#16]
-| `interface` usage as a body member
-| open
-
-| <<bug-9,Bug 9>>
-| https://github.com/elan8/sysml-v2-parser/issues/17[#17]
-| `exhibit state … parallel`
-| open
-
-| <<bug-10,Bug 10>>, <<bug-11,11>>, <<bug-12,12>>, <<bug-14,14>>, <<bug-15,15>>,
-  <<bug-16,16>>
+| <<bug-10,Bug 10>>, <<bug-11,11>>, <<bug-12,12>>, <<bug-14,14>>, <<bug-16,16>>
 | —
 | —
 | *unfiled*
+
+| <<literal-prefix,`null`/`true`/`false` identifier prefixes>>
+| —
+| Literal keywords matched without a word boundary, so `nullPoint` / `trueValue` /
+  `falseAlarm` fail to parse
+| *unfiled* — new in this bump
 |===
 
-`ref part x : T[*];` — 3 diagnostics in <<What is failing, and why>> — has no report
+`ref part x : T[*];` — 3 diagnostics in <<what-is-failing,What is failing, and why>> —
+has no report
 of its own.
 It was one, until building against `main` showed it already fixed there: PR
 https://github.com/elan8/sysml-v2-parser/pull/11[#11], the fix for
@@ -591,17 +749,16 @@ covered the missing multiplicity in the same `part_ref_usage` function.
 It is real in 0.50.0, which is what this workspace pins, and will close itself at the
 next release.
 
-An earlier report covering `part :>> name { … }` in an action body has been folded into
-<<bug-1,Bug 1>>, where it belongs: it is one more `ActionBodyItem` member kind, and
-<<bug-1,Bug 1>>'s issue `#13` is where a fix would land.
+An earlier report covering `part :>> name { … }` in an action body was folded into the
+`ActionBodyItem` report (issue `#13`) as one more member kind. Both are fixed in
+0.53.0.
 
 Two issues from the earlier specs are closed and fixed in 0.50.0:
-https://github.com/elan8/sysml-v2-parser/issues/1[#1] (comment-block recovery,
-xref:01-fix-comment-block.adoc[spec 01]) and
-https://github.com/elan8/sysml-v2-parser/issues/2[#2] (the divergence,
-xref:02-parser-inconsistency.adoc[spec 02]).
-https://github.com/elan8/sysml-v2-parser/issues/12[#12] carries spec 02's remaining
-criterion and is open.
+https://github.com/elan8/sysml-v2-parser/issues/1[#1] (comment-block recovery) and
+https://github.com/elan8/sysml-v2-parser/issues/2[#2] (the strict/recovery
+divergence), both fixed in 0.50.0.
+https://github.com/elan8/sysml-v2-parser/issues/12[#12] carried the last parity
+criterion; 0.53.0 closed it.
 
 [WARNING]
 ====
@@ -631,302 +788,11 @@ Six of the original sixteen have gone: Bugs 3, 4, 7 and 13 were withdrawn once r
 and the <<Evidence audit>> established they were defects in this workspace's models
 rather than parser gaps, and what they described is now in <<The real defects found>>
 (defects 5, 2, 3 and 6 respectively).
-Bug 6 was folded into <<bug-1,Bug 1>> as one more `ActionBodyItem` member kind, and
-Bug 8 removed once `main` showed it already fixed.
+Bug 6 was folded into the `ActionBodyItem` report as one more member kind, and Bug 8
+removed once `main` showed it already fixed.
+Bugs 1, 2, 5 and 9 were removed when 0.53.0 fixed them.
 The surviving numbers are deliberately left as they were so that anything already
 citing them still resolves.
-
-[#bug-1]
-=== Bug 1: `ActionBodyItem` coverage — structural members in action bodies
-
-*Filed as https://github.com/elan8/sysml-v2-parser/issues/13[issue #13]* (open).
-
-CAUTION: `#13` as filed also lists `foreach` and `snapshot`.
-`foreach` is not a SysML v2 keyword and should be removed from the issue — see
-<<Filing status>>.
-Three of the members below rest on inference rather than corpus precedent: `item`,
-`snapshot` and the `part :>>` anonymous-redefinition form.
-`part`, `assert constraint` and `variation` are attested in action bodies and carry the
-argument; the other three are worth marking as inferred when updating the issue.
-
-*Summary.* An action body accepts only a subset of `ActionBodyItem`.
-Structural members that the spec admits are rejected.
-27 of the 56 diagnostics in this workspace come from this one gap — 38 counting the
-nested `action def` of <<bug-2,Bug 2>> — making it by far the highest-value fix.
-`action_def_body_element` already documents itself as "a pragmatic subset".
-
-*Reproductions.* Each fails independently.
-
-[source,sysml]
-----
-package Shop {
-    part def Wheel;
-    action def Truing {
-        part rim : Wheel;                       // unexpected keyword `part` in action body
-    }
-}
-----
-
-[source,sysml]
-----
-package Shop {
-    item def Spoke;
-    action def Truing {
-        item spokes : Spoke[*];                 // unexpected keyword `item` in action body
-    }
-}
-----
-
-NOTE: `for s in spokes { … }` in the same position *is* accepted, as is
-`for n in (1, 2, 3) { … }`.
-An earlier draft of this report also listed `foreach`, which is not a SysML v2
-keyword at all — see
-<<Model defect 4: `foreach` is not SysML v2>>.
-A separate, genuine loop gap is <<bug-16,Bug 16>>.
-
-[source,sysml]
-----
-package Shop {
-    action def Truing {
-        assert constraint { 1 > 0 }             // unexpected keyword `assert` in action body
-    }
-}
-----
-
-[source,sysml]
-----
-package Shop {
-    action def Truing {
-        variation action method {                // unexpected keyword `variation` in action body
-            action byHand;
-            action byJig;
-        }
-    }
-}
-----
-
-[source,sysml]
-----
-package Shop {
-    action def Truing {
-        snapshot trued { }                      // unexpected keyword `snapshot` in action body
-    }
-}
-----
-
-[source,sysml]
-----
-package Shop {
-    action def Assembly {
-        part :>> station { }                    // unexpected keyword `part` in action body
-    }
-}
-----
-
-*Control.* `action tighten;`, `for s in xs { … }` and a plain `first a then b;` in the
-same position are all accepted, so the dispatch itself works — it is the member kinds
-that are missing.
-
-The anonymous-redefinition form above has its own control: the identical member inside
-a *part usage* body is accepted, which is what makes the action-body rejection look
-like a coverage gap rather than a grammar rule.
-
-[source,sysml]
-----
-package Shop {
-    part def Tube;
-    part def Frame { part seatTube : Tube; }
-    part bike : Frame {
-        part :>> seatTube { }                   // accepted
-    }
-}
-----
-
-*OMG precedent, in an action body specifically.*
-`part` — `Parts.sysml:51` in the Systems Library
-(`ref part this : Part :>> Action::this, …`) and
-`3e-Function-based Behavior-item.sysml:28`.
-`assert constraint` — six occurrences, including `Dynamics.sysml:40` and
-`Vehicle Analysis Demo.sysml:140`.
-`variation` — `VehicleVariabilityModel.sysml:127`
-(`variation action generateTorque : GenerateTorque {`).
-`item`, `snapshot` and the `part :>>` form have no direct precedent in the corpus in
-this position.
-They are included because they reach `ActionBodyItem` through the same
-`DefinitionElement` production as `part`, which is attested — and, for `part :>>`,
-because the identical member is accepted in a part usage body.
-That is inference rather than evidence, weaker than the three above, and worth saying so
-in the issue.
-`snapshot` is the weakest: it occurs 58 times in the corpus, never once in an action
-body.
-
-[#bug-2]
-=== Bug 2: `action def` nested inside a part definition body
-
-*Filed as https://github.com/elan8/sysml-v2-parser/issues/14[issue #14]* (open).
-
-NOTE: Independently corroborated upstream.
-`PARSER_BACKLOG_ROADMAP.md` gained this as *G32* in PR
-https://github.com/elan8/sysml-v2-parser/pull/15[#15], found while adapting Spec42 to
-0.50.0 and described there as "`PartDefBodyElement` has no `ActionDef` variant at all
-… unlike its already-supported siblings `StateDef`/`MetadataDef`/`FlowDef`/
-`RequirementDef`".
-That is the same asymmetry argument as below, reached from a different direction — the
-strongest confirmation any report here has.
-
-*Summary.* `action def` is the *only* definition kind rejected inside a `part def`
-body.
-Seven others are accepted in the same position, so this is an isolated omission
-rather than a general restriction on nesting.
-Accounts for 11 diagnostics, and is the sole cause of failure in four files here.
-
-*The asymmetry.* Same body, same `{ }`, only the keyword changes:
-
-[cols="2,1"]
-|===
-| Nested in `part def Outer { … }` | Verdict
-
-| `attribute def A { }`
-| accepts
-
-| `item def I { }`
-| accepts
-
-| `port def P { }`
-| accepts
-
-| `part def P2 { }`
-| accepts
-
-| `calc def C { }`
-| accepts
-
-| `state def S { }`
-| accepts
-
-| `constraint def K { }`
-| accepts
-
-| `action def A2 { }`
-| *rejects*
-|===
-
-*OMG precedent.* Nested definitions inside a `part def` body occur 16 times in the
-corpus — for example `attribute def CartInput :> Input {` in `CartSample.sysml:8` and
-`attribute def VehicleInput :> Input {` in `EVSample.sysml:11`.
-No `action def` instance appears, so the precedent is for the *category* rather than
-this keyword; the seven-of-eight asymmetry above is the stronger argument.
-
-*Reproduction.*
-
-[source,sysml]
-----
-package Shop {
-    part def TileCache {
-        action def GetTile { }
-    }
-}
-----
-
-----
-expected ';' or '{' after action definition header
-----
-
-The diagnostic is also misleading: a body *is* present.
-
-*Control.* Both of these are accepted, isolating the gap to the nested `def` form:
-
-[source,sysml]
-----
-package Shop {
-    part def TileCache {
-        action getTile;             // usage — accepted
-    }
-}
-----
-
-[source,sysml]
-----
-package Shop {
-    action def GetTile { }          // same definition at package level — accepted
-}
-----
-
-[#bug-5]
-=== Bug 5: `interface` usage as a body member
-
-*Filed as https://github.com/elan8/sysml-v2-parser/issues/16[issue #16]* (open).
-
-*Summary.* An `interface` *usage* is rejected as a member of a part definition
-body, with or without a `connect` clause.
-`interface def` at package level is accepted, as is a plain `connect`.
-
-*Reproduction.*
-
-[source,sysml]
-----
-package Shop {
-    port def HubPort;
-    interface def SpokeInterface { end p1 : HubPort; end p2 : HubPort; }
-    part def Hub { port p : HubPort; }
-    part def Rim { port p : HubPort; }
-    part def Wheel {
-        part hub : Hub;
-        part rim : Rim;
-        interface hubToRim : SpokeInterface;
-    }
-}
-----
-
-----
-unexpected token in part definition body
-----
-
-*The `connect` form additionally misreports.*
-Written across two lines — the layout the OMG spec Annex examples use — the
-diagnostic becomes a semicolon complaint about a construct that needs no
-semicolon there:
-
-[source,sysml]
-----
-        interface hubToRim : SpokeInterface
-            connect [1] hub.p to [1] rim.p;
-----
-
-----
-missing semicolon before next declaration
-----
-
-*Control.* `connect hub.p to rim.p;` and `connect [1] hub.p to [1] rim.p;` are both
-accepted in the same position, so neither `connect` nor endpoint multiplicity is
-the problem — it is the `interface` usage member.
-
-[#bug-9]
-=== Bug 9: `exhibit state … parallel`
-
-*Filed as https://github.com/elan8/sysml-v2-parser/issues/17[issue #17]* (open).
-
-*Summary.* The `parallel` modifier on an `exhibit state` member is rejected.
-
-*Reproduction.*
-
-[source,sysml]
-----
-package Shop {
-    part def Wheel {
-        exhibit state wheelStates parallel {
-            state spinning;
-            state stopped;
-        }
-    }
-}
-----
-
-----
-unexpected token in part definition body
-----
-
-*Control.* The same member without `parallel` is accepted.
 
 [#bug-10]
 === Bug 10: `perform x.y redefines z;` keyword form
@@ -1092,113 +958,53 @@ package Shop {
 [#bug-15]
 === Bug 15: diagnostics that describe the recovery position, not the mistake
 
-Three related diagnostic-quality defects, no grammar change implied.
-Worth filing together, and worth filing *first*: two of them actively caused
-mis-diagnosis during this investigation, and they make every gap above harder to
-read.
+*Status.* Filed with two sibling defects as
+https://github.com/elan8/sysml-v2-parser/issues/18[issue #18], closed 2026-07-31.
+Two of the three were fixed in 0.53.0, *exactly as this spec proposed*, and have been
+removed from it:
 
-==== 15a. `expected unit name inside '[ ]'` where there is no `[`
+[cols="1,2,2"]
+|===
+| Was | Proposed here | 0.53.0 emits
 
-*Summary.* Reported for inputs containing no `[` on the reported line, at a position
-belonging to an unrelated enclosing construct.
-It accounts for 10 of the 56 diagnostics here, across three unrelated constructs:
-`part` in an action body, a nested `action def` and `part :>>`.
+| 15b — an unrecognized identifier called a "keyword"
+| ``unrecognized declaration `test` ``
+| ``unrecognized declaration `test` in package body``
 
-*Observed behaviour.* The same declaration produces different messages depending on
-unrelated content elsewhere in the file.
+| 15c — a bare comma reporting the enclosing body
+| `unexpected ',' … enclose a sequence in '( … )'`
+| `unexpected ',' in feature value assignment; use sequence brackets '(a, b)' to
+  assign multiple values` — and at the comma's own column
+|===
 
-The clearest case: two files each contain, inside an `action def` body, the
-character-for-character equivalent member — same feature name, same type — and it
-is the <<bug-1,Bug 1>> gap in both:
+15a — `expected unit name inside '[ ]'` reported where there is no `[` — is also gone
+from this workspace, but was never minimized and is not demonstrably fixed: the string
+still exists in `diagnostics.rs`, and what removed it here was the closing of the three
+grammar gaps that triggered it, which this spec predicted might happen.
+Removed as unreproducible rather than recorded as fixed.
+
+*What survives.* The general defect: a diagnostic that names where recovery landed
+rather than where the mistake is. Live on 0.53.0 —
 
 [source,sysml]
 ----
-        part deployment : K8sDeploymentContext;
+package P {
+    action c : Campaign {
+        flow env to nullPoint.env;   // the offending token
+        flow env to zeroPoint.env;
+                                     // <- reported here, on a blank line
+    }
+}
 ----
 
-----
-a.sysml:263:9: unexpected keyword `part` in action body
-b.sysml:39:9:  expected unit name inside '[ ]'
-----
+The error for the mis-lexed `nullPoint` (see
+<<literal-prefix,the literal-prefix bug>>) is
+reported two lines further down, at a column on an *empty* line. That cost a full
+bisection to locate, because the position pointed at whitespace.
 
-Neither line contains a `[`, and in `b` there is no `[` anywhere near it.
+No grammar change is implied. The fix is for recovery to carry the position of the
+token that failed rather than the position at which scanning stopped.
 
-In one traced instance the trigger was a `[0, 255]` *inside a doc comment*, 247
-lines below the reported position: bracketed text in a comment within the recovery
-region appears to be scanned as a unit expression, and the resulting error is then
-selected as the file's verdict.
-
-*Not yet minimized.*
-Short reproductions have so far resisted — an unsupported construct plus a comment
-containing `[0, 255]`, in isolation, reports the ordinary message.
-The trigger needs more surrounding structure than that.
-Filing this with the honest description above is more useful than a synthetic
-example that does not reproduce it — and closing the grammar gaps in
-the grammar gaps above may well remove the opaque-capture regions that produce it, in
-which case this resolves on its own.
-
-[NOTE]
-====
-The first evidence for this bug came from two `test case def` files, which turned
-out to be an invalid construct (<<Model defect 2: `test case def` is not SysML v2>>)
-and are now fixed.
-The phenomenon is unaffected: 21 occurrences remain, spread over six constructs
-that *are* valid SysML v2, and the two-file contrast above is drawn from those.
-====
-
-*Suggested direction.* Two things are worth separating: whether the alternative
-that produces the message should be reachable at all in these positions, and
-whether comment content can leak into token scanning during recovery — the latter
-being the same class of defect as
-xref:01-fix-comment-block.adoc[spec 01], which was fixed for the bare-feature
-heuristic but perhaps not for bracket scanning.
-
-==== 15b. An unrecognized identifier is called a "keyword"
-
-*Summary.* When a body element begins with an identifier the parser does not
-recognize, the diagnostic names it as a keyword:
-
-----
-unexpected keyword `test` in package body
-unexpected keyword `distancePerVolume` in package body
-----
-
-Neither `test` nor `distancePerVolume` is a keyword — the first is not in the
-language at all, the second is an ordinary feature name.
-
-*Why it matters.* This wording inverts the reader's diagnosis.
-"Unexpected keyword X" reads as *"X is a construct I know but do not support here"*,
-which points at the parser.
-The truth is *"X is not anything I recognize"*, which points at the input.
-It cost this investigation a full mis-filed report: `test case def` was recorded as
-an upstream gap on the strength of this phrasing alone, before anyone checked whether
-SysML v2 has a `test` keyword.
-It does not — see <<Model defect 2: `test case def` is not SysML v2>>.
-
-*Suggested wording.* `unrecognized declaration `test`` — or, when the token is
-genuinely a keyword in the wrong place, keep the current phrasing and reserve it for
-that case.
-
-==== 15c. A bare comma reports the enclosing body, not the comma
-
-*Summary.* `part :>> readings = a, b;` — a comma-separated list where a sequence
-constructor is required — reports:
-
-----
-unexpected token in part definition body
-----
-
-The parser closes the feature-value expression at the comma and then tries to read
-`b` as the next body element, so the position it reports is the body rather than the
-comma.
-
-*Why it matters.* The message gives no hint that `( … )` is what is missing, and
-names a location the author did not write anything wrong at.
-This also produced a mis-filed report — see
-<<Model defect 3: bare comma list where a sequence constructor was meant>>.
-
-*Suggested wording.* `unexpected ',' in feature value — enclose a sequence in
-'( … )'`, which turns a confusing recovery failure into a self-answering message.
 
 [#bug-16]
 === Bug 16: typed loop variable in a `for` loop
@@ -1259,26 +1065,6 @@ evidence for the same construct in an action body.
 |===
 | Report | Strongest evidence | Confidence
 
-| <<bug-1,1>>
-| `part`, `assert constraint` and `variation` all occur inside action bodies in the
-  corpus. `item`, `snapshot` and the `part :>>` form do not — inferred from the shared
-  production.
-| high for three of six members
-
-| <<bug-2,2>>
-| Seven of eight definition kinds accepted in the same position; 16 nested-definition
-  instances in the corpus.
-| high
-
-| <<bug-5,5>>
-| 29 `interface` usage members inside part bodies, including 8 in the PTC model.
-| high
-
-| <<bug-9,9>>
-| `exhibit state vehicleStates parallel {` and `… controllerStates parallel {` in the
-  PTC model.
-| high
-
 | <<bug-10,10>>
 | `perform providePower.generateTorque redefines generateTorque;` in the PTC model,
   plus 41 uses of the `redefines` keyword on usages across the corpus.
@@ -1299,7 +1085,8 @@ evidence for the same construct in an action body.
 | high
 
 | <<bug-15,15>>
-| Diagnostic-quality only; 10 remaining occurrences across three constructs.
+| Diagnostic-quality only. Two of the three sub-cases fixed in 0.53.0; the surviving
+  wrong-position symptom is reproduced there.
 | n/a
 
 | <<bug-16,16>>
@@ -1307,12 +1094,11 @@ evidence for the same construct in an action body.
 | high
 |===
 
-*Where inference still carries weight.* Three of <<bug-1,Bug 1>>'s six member kinds
-have no corpus instance in an action body: `item`, `snapshot`, and the
-`part :>> name { … }` anonymous-redefinition form.
-Each is plausible — they reach `ActionBodyItem` through the same `DefinitionElement`
-production as `part`, which is attested — but that is the same shape of reasoning that
-produced the five withdrawals.
+*Where inference still carries weight.* The `ActionBodyItem` report rested partly on
+inference — three of its six member kinds had no corpus instance in an action body —
+and 0.53.0 fixing all of them settled it in inference's favour.
+That is one data point, not a licence: the same shape of reasoning produced the five
+withdrawals recorded above.
 They are inside `#13` rather than filed separately, which is the right place for them:
 a fix to `ActionBodyElement` covers all six, and a reviewer who rejects the weak three
 can still act on the strong three.
