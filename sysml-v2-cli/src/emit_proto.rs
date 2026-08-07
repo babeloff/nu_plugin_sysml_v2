@@ -142,32 +142,32 @@ mod tests {
 
     fn simple_model() -> EmitModel {
         EmitModel {
-            sysml_name: "CotEventMsg".to_owned(),
-            proto_package: "rsdk.cot.proto".to_owned(),
-            xsd_namespace: "urn:rsdk:cot:proto".to_owned(),
+            sysml_name: "ResourceDefsSensor".to_owned(),
+            proto_package: "dains.resources.sensor".to_owned(),
+            xsd_namespace: "urn:dains:resources:sensor".to_owned(),
             proto_imports: vec![],
             xsd_imports: vec![],
             definitions: vec![
                 EmitDef::Message(EmitMessage {
-                    name: "CotEvent".to_owned(),
-                    doc: Some("A Cursor-on-Target event.".to_owned()),
+                    name: "VideoFrame".to_owned(),
+                    doc: Some("JPEG-encoded camera frame.".to_owned()),
                     nested: vec![],
                     fields: vec![
                         EmitField {
-                            name: "type".to_owned(),
-                            ty: "string".to_owned(),
+                            name: "width".to_owned(),
+                            ty: "int64".to_owned(),
                             mult: EmitMult::Required,
                             is_scalar: true,
                         },
                         EmitField {
-                            name: "uid".to_owned(),
-                            ty: "string".to_owned(),
+                            name: "height".to_owned(),
+                            ty: "int64".to_owned(),
                             mult: EmitMult::Required,
                             is_scalar: true,
                         },
                         EmitField {
-                            name: "lat".to_owned(),
-                            ty: "double".to_owned(),
+                            name: "jpegQuality".to_owned(),
+                            ty: "int64".to_owned(),
                             mult: EmitMult::Optional,
                             is_scalar: true,
                         },
@@ -186,15 +186,15 @@ mod tests {
     fn proto_contains_syntax() {
         let out = emit_proto(&simple_model());
         assert!(out.contains("syntax = \"proto3\";"), "missing syntax line");
-        assert!(out.contains("package rsdk.cot.proto;"), "missing package");
+        assert!(out.contains("package dains.resources.sensor;"), "missing package");
     }
 
     #[test]
     fn proto_field_numbers() {
         let out = emit_proto(&simple_model());
-        assert!(out.contains("string type = 1;"));
-        assert!(out.contains("string uid = 2;"));
-        assert!(out.contains("optional double lat = 3;"));
+        assert!(out.contains("int64 width = 1;"));
+        assert!(out.contains("int64 height = 2;"));
+        assert!(out.contains("optional int64 jpegQuality = 3;"));
     }
 
     #[test]

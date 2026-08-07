@@ -21,11 +21,11 @@ under `target/debug/`.
 
 [source,bash]
 ----
-cat > track.sysml <<'EOF'
-package CotDetailMsg {
-    item def Track {
-        attribute course : Real;
-        attribute speed  : Real;
+cat > sensor.sysml <<'EOF'
+package ResourceDefsSensor {
+    item def VideoFrame {
+        attribute width  : Integer;
+        attribute height : Integer;
     }
 }
 EOF

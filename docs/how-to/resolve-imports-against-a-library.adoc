@@ -74,8 +74,10 @@ open --raw resources.sysml | lint sysml --resolve-imports --lib-dir [/path/to/sy
 cross-package `.proto`/`.xsd` imports are derived: instead of the
 hardcoded granule package table (`derive_proto_package`/
 `proto_file_for_package` in `sysml-v2-cli/src/lower.rs`), a resolved
-package's import filename comes from the real file that defines it (e.g.
-`CotEventMsg.sysml` → `import "CotEventMsg.proto";`). Packages `--lib-dir`
+package's import filename comes from the real file that defines it — the
+file's stem, which need not match the package name. `ResourceDefsSensor`
+lives in `schema/resources/resource-defs-sensor.sysml`, so resolving it
+yields `import "resource-defs-sensor.proto";`. Packages `--lib-dir`
 doesn't resolve still fall back to the hardcoded table, so existing
 granule-message emit output is unaffected unless you pass `--lib-dir`.
 Unresolved imports/references are printed to stderr as warnings rather

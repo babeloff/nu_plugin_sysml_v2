@@ -130,8 +130,8 @@ fn without_the_flag_unresolved_imports_are_not_flagged() {
 fn emit_derives_cross_package_import_from_resolved_library_file() {
     let lib_dir = isq_si_lib_dir();
     fs::write(
-        lib_dir.path().join("CotEventMsg.sysml"),
-        "package CotEventMsg {\n    item def CotEvent {\n        attribute uid : String;\n    }\n}\n",
+        lib_dir.path().join("ResourceDefsSensor.sysml"),
+        "package ResourceDefsSensor {\n    item def VideoFrame {\n        attribute width : Integer;\n    }\n}\n",
     )
     .unwrap();
 
@@ -140,10 +140,10 @@ fn emit_derives_cross_package_import_from_resolved_library_file() {
         scratch.path(),
         "cross-pkg.sysml",
         r#"
-        package CotDetailMsg {
-            private import CotEventMsg::*;
-            item def Detail {
-                attribute event : CotEventMsg::CotEvent;
+        package PerceptionDefs {
+            private import ResourceDefsSensor::*;
+            item def Detection {
+                attribute frame : ResourceDefsSensor::VideoFrame;
             }
         }
         "#,
@@ -160,7 +160,7 @@ fn emit_derives_cross_package_import_from_resolved_library_file() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Derived from CotEventMsg.sysml's own filename stem, not the
-    // hardcoded granule package table's "cotevent.proto".
-    assert!(stdout.contains(r#"import "CotEventMsg.proto";"#), "{stdout}");
+    // The import name comes from the resolved file's own stem — the only
+    // source now that the hardcoded package table is gone.
+    assert!(stdout.contains(r#"import "ResourceDefsSensor.proto";"#), "{stdout}");
 }

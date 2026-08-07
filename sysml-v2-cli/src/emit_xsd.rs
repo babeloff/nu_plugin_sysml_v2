@@ -200,25 +200,25 @@ mod tests {
 
     fn simple_model() -> EmitModel {
         EmitModel {
-            sysml_name: "CotEventMsg".to_owned(),
-            proto_package: "rsdk.cot.proto".to_owned(),
-            xsd_namespace: "urn:rsdk:cot:proto".to_owned(),
+            sysml_name: "ResourceDefsSensor".to_owned(),
+            proto_package: "dains.resources.sensor".to_owned(),
+            xsd_namespace: "urn:dains:resources:sensor".to_owned(),
             proto_imports: vec![],
             xsd_imports: vec![],
             definitions: vec![EmitDef::Message(EmitMessage {
-                name: "CotEvent".to_owned(),
+                name: "VideoFrame".to_owned(),
                 doc: None,
                 nested: vec![],
                 fields: vec![
                     EmitField {
-                        name: "type".to_owned(),
-                        ty: "string".to_owned(),
+                        name: "width".to_owned(),
+                        ty: "int64".to_owned(),
                         mult: EmitMult::Required,
                         is_scalar: true,
                     },
                     EmitField {
-                        name: "lat".to_owned(),
-                        ty: "double".to_owned(),
+                        name: "jpegQuality".to_owned(),
+                        ty: "int64".to_owned(),
                         mult: EmitMult::Optional,
                         is_scalar: true,
                     },
@@ -232,14 +232,14 @@ mod tests {
         let out = emit_xsd(&simple_model());
         assert!(out.contains("<?xml version=\"1.0\""));
         assert!(out.contains("xs:schema"));
-        assert!(out.contains("urn:rsdk:cot:proto"));
+        assert!(out.contains("urn:dains:resources:sensor"));
     }
 
     #[test]
     fn xsd_complex_type() {
         let out = emit_xsd(&simple_model());
-        assert!(out.contains("<xs:complexType name=\"CotEvent\">"));
-        assert!(out.contains("<xs:element name=\"type\" type=\"xs:string\"/>"));
+        assert!(out.contains("<xs:complexType name=\"VideoFrame\">"));
+        assert!(out.contains("<xs:element name=\"width\" type=\"xs:long\"/>"));
         assert!(out.contains("minOccurs=\"0\" maxOccurs=\"1\""));
     }
 }

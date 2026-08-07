@@ -52,7 +52,7 @@ a file stem. Override it explicitly with `--name`/`-n`:
 
 [source,nu]
 ----
-open --raw resources.sysml | to proto --name CotDetailMsg
+open --raw resources.sysml | to proto --name ResourceDefsSensor
 ----
 
 See xref:../reference/plugin-commands.adoc[the plugin command reference]

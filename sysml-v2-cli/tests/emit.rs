@@ -13,10 +13,10 @@ fn emits_proto_and_xsd_to_stdout() {
     write!(
         file,
         r#"
-        package CotDetailMsg {{
-            item def Track {{
-                attribute course : Real;
-                attribute speed  : Real;
+        package ResourceDefsSensor {{
+            item def VideoFrame {{
+                attribute width  : Integer;
+                attribute height : Integer;
             }}
         }}
         "#
@@ -32,7 +32,7 @@ fn emits_proto_and_xsd_to_stdout() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("syntax = \"proto3\";"));
-    assert!(stdout.contains("message Track"));
+    assert!(stdout.contains("message VideoFrame"));
     assert!(stdout.contains("<?xml version=\"1.0\""));
     assert!(stdout.contains("complexType"));
 }
@@ -46,9 +46,9 @@ fn emits_proto_and_xsd_to_directories() {
     write!(
         file,
         r#"
-        package CotDetailMsg {{
-            item def Track {{
-                attribute course : Real;
+        package ResourceDefsSensor {{
+            item def VideoFrame {{
+                attribute width  : Integer;
             }}
         }}
         "#

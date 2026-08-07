@@ -3,10 +3,8 @@
 //! Walks the `sysml-v2-parser` AST to build a flat [`HirSymbol`] list, then
 //! lowers that list into an [`EmitModel`] ready for proto/XSD generation.
 //!
-//! Moved here from `channel-adapter/crate/sysml-emit` — the CoT message
-//! schema domain (`derive_proto_package`, `proto_file_for_package`, etc.)
-//! is channel-adapter-specific, but the AST-walking/lowering machinery
-//! itself is generic SysML v2 processing, so it now lives alongside the
+//! Moved here from `channel-adapter/crate/sysml-emit`. The AST-walking and
+//! lowering machinery is generic SysML v2 processing, so it lives alongside the
 //! rest of the granule toolchain's SysML tooling in `sysml-v2-cli`.
 //!
 //! Also home to the AST-walking helpers ([`collect_package_names`],
@@ -527,13 +525,13 @@ fn qualify(parent: &str, name: &str) -> String {
 /// Top-level model for one SysML package / file.
 #[derive(Debug, Default)]
 pub struct EmitModel {
-    /// SysML package name (e.g. `CotDetailMsg`).
+    /// SysML package name (e.g. `ResourceDefsSensor`).
     pub sysml_name: String,
     /// Proto3 package name (e.g. `rsdk.cot.detail`).
     pub proto_package: String,
     /// XSD target namespace (e.g. `urn:rsdk:cot:detail`).
     pub xsd_namespace: String,
-    /// Filenames to import in the generated `.proto` (e.g. `"cotdetail.proto"`).
+    /// Filenames to import in the generated `.proto` (e.g. `"resource-defs-sensor.proto"`).
     pub proto_imports: Vec<String>,
     /// `(namespace, schemaLocation)` pairs for XSD `xs:import`.
     pub xsd_imports: Vec<(String, String)>,
@@ -600,56 +598,12 @@ pub trait PackageResolver {
 // Package-name mappings
 // ---------------------------------------------------------------------------
 
-fn derive_proto_package(pkg: &str) -> &str {
-    match pkg {
-        "CotEventMsg" => "rsdk.cot.proto",
-        "CotDetailMsg" => "rsdk.cot.detail",
-        "CotDetailAtakMsg" => "rsdk.cot.detail.atak",
-        "CotDetailUsMilMsg" => "rsdk.cot.detail.usmil",
-        "CotDetailFtsMsg" => "rsdk.cot.detail.fts",
-        "CotDetailAtakCivMsg" => "rsdk.cot.detail.atakciv",
-        "CotGuessAtakMsg" => "rsdk.cot.guess.atak",
-        "CotGuessFtsMsg" => "rsdk.cot.guess.fts",
-        "CotGuessMisbMsg" => "rsdk.cot.guess.misb",
-        other => other,
-    }
-}
 
 fn derive_xsd_namespace(proto_pkg: &str) -> String {
     format!("urn:{}", proto_pkg.replace('.', ":"))
 }
 
-/// Proto file name that defines a given top-level SysML package name.
-fn proto_file_for_package(pkg: &str) -> Option<&str> {
-    match pkg {
-        "CotEventMsg" => Some("cotevent.proto"),
-        "CotDetailMsg" => Some("cotdetail.proto"),
-        "CotDetailAtakMsg" => Some("cotdetail-atak.proto"),
-        "CotDetailUsMilMsg" => Some("cotdetail-usmil.proto"),
-        "CotDetailFtsMsg" => Some("cotdetail-fts.proto"),
-        "CotDetailAtakCivMsg" => Some("cotdetail-atakciv.proto"),
-        "CotGuessAtakMsg" => Some("cotguess-atak.proto"),
-        "CotGuessFtsMsg" => Some("cotguess-fts.proto"),
-        "CotGuessMisbMsg" => Some("cotguess-misb.proto"),
-        _ => None,
-    }
-}
 
-/// XSD file name that defines a given top-level SysML package name.
-fn xsd_file_for_package(pkg: &str) -> Option<&str> {
-    match pkg {
-        "CotEventMsg" => Some("cotevent.xsd"),
-        "CotDetailMsg" => Some("cotdetail.xsd"),
-        "CotDetailAtakMsg" => Some("cotdetail-atak.xsd"),
-        "CotDetailUsMilMsg" => Some("cotdetail-usmil.xsd"),
-        "CotDetailFtsMsg" => Some("cotdetail-fts.xsd"),
-        "CotDetailAtakCivMsg" => Some("cotdetail-atakciv.xsd"),
-        "CotGuessAtakMsg" => Some("cotguess-atak.xsd"),
-        "CotGuessFtsMsg" => Some("cotguess-fts.xsd"),
-        "CotGuessMisbMsg" => Some("cotguess-misb.xsd"),
-        _ => None,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // SysML → proto type mapping
@@ -706,7 +660,7 @@ pub fn parse_package_name(source: &str) -> Option<String> {
 
 /// Lower a single SysML v2 source string into an [`EmitModel`].
 ///
-/// `package_name` is the SysML package identifier (e.g. `"CotDetailMsg"`).
+/// `package_name` is the SysML package identifier (e.g. `"ResourceDefsSensor"`).
 pub fn lower_file(source: &str, package_name: impl Into<String>) -> EmitModel {
     lower_file_with_resolver(source, package_name, None)
 }
@@ -721,7 +675,7 @@ pub fn lower_file_with_resolver(
     resolver: Option<&dyn PackageResolver>,
 ) -> EmitModel {
     let pkg = package_name.into();
-    let proto_package = derive_proto_package(&pkg).to_owned();
+    let proto_package = pkg.clone();
     let xsd_namespace = derive_xsd_namespace(&proto_package);
 
     let symbols = file_symbols_from_text(source);
@@ -796,20 +750,10 @@ fn collect_imports(
                 continue;
             }
 
-            // Fall back to the hardcoded granule message-package table
-            // (no resolver given, or it didn't recognize this package).
-            if let Some(proto_file) = proto_file_for_package(ref_pkg) {
-                if seen_protos.insert(proto_file.to_owned()) {
-                    model.proto_imports.push(proto_file.to_owned());
-                }
-            }
-            if let Some(xsd_file) = xsd_file_for_package(ref_pkg) {
-                let ns = derive_xsd_namespace(derive_proto_package(ref_pkg));
-                let key = format!("{ns}|{xsd_file}");
-                if seen_xsd.insert(key) {
-                    model.xsd_imports.push((ns, xsd_file.to_owned()));
-                }
-            }
+            // Unresolved: nothing to import. A cross-package reference the
+            // resolver cannot place yields no import line rather than a guess.
+            // This is where a hardcoded table of CoT message packages used to
+            // sit; every package it named has been removed from the project.
         }
     }
 }
